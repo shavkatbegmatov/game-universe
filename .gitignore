@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.vite/
+.vite-dev.*.log
+.vite-dev.*
+.vite-live.log
+.audit-dev.*
+.agents/
+.claude/
+*.log
