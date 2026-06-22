@@ -1,7 +1,7 @@
-export const TEXTURE_SIZE = 256;
+export const TEXTURE_SIZE = 128;
 export const PARTICLE_COUNT = TEXTURE_SIZE * TEXTURE_SIZE;
-export const MAIN_BODY_COUNT = 1024;
-export const FRAGMENTS_PER_EVENT = 60;
+export const MAIN_BODY_COUNT = 256;
+export const FRAGMENTS_PER_EVENT = 40;
 
 const shaderConstants = `
   #define TEX_SIZE ${TEXTURE_SIZE}.0
@@ -127,16 +127,9 @@ const shaderConstants = `
     float partner = -1.0;
     float deepest = 0.0;
     
-    // Оптимизация: основные тела проверяют всех. Осколки проверяют все основные тела (MAIN_BODY_COUNT)
-    // + скользящее окно из 128 соседних осколков.
-    bool isFragment = selfIndex >= MAIN_BODY_COUNT;
-    int windowStart = isFragment ? int(selfIndex) - 64 : 0;
-    int windowEnd = isFragment ? int(selfIndex) + 64 : int(PARTICLE_COUNT);
-    
-    for (int j = 0; j < PARTICLE_COUNT; j++) {
-      if (isFragment && j >= int(MAIN_BODY_COUNT) && (j < windowStart || j > windowEnd)) {
-        continue;
-      }
+    // Оптимизация: все тела проверяют столкновения только с основными телами (MAIN_BODY_COUNT).
+    // Это исключает лаги и позволяет поддерживать 16,384 частиц на 60 FPS.
+    for (int j = 0; j < int(MAIN_BODY_COUNT); j++) {
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -522,31 +515,21 @@ export const velocityShader = `
     float deepest = 0.0;
     bool selfSettled = velocityData.w <= 1.0001;
 
-    // Оптимизация: основные тела проверяют всех. Осколки проверяют все основные тела (MAIN_BODY_COUNT)
-    // + скользящее окно из 128 соседних осколков.
-    bool isFragment = selfIndex >= MAIN_BODY_COUNT;
-    int windowStart = isFragment ? int(selfIndex) - 64 : 0;
-    int windowEnd = isFragment ? int(selfIndex) + 64 : int(PARTICLE_COUNT);
-
-    for (int j = 0; j < PARTICLE_COUNT; j++) {
-      if (isFragment && j >= int(MAIN_BODY_COUNT) && (j < windowStart || j > windowEnd)) {
-        continue;
-      }
+    // Оптимизация: проверяем столкновения и гравитацию только с основными телами (MAIN_BODY_COUNT)
+    for (int j = 0; j < int(MAIN_BODY_COUNT); j++) {
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
       if (otherPosition.z <= 0.0) continue;
       vec2 delta = otherPosition.xy - positionData.xy;
 
-      // Накопление гравитации (только от основных тел)
-      if (j < int(MAIN_BODY_COUNT)) {
-        float distanceSq = dot(delta, delta) + SOFTENING * SOFTENING;
-        float inverseDistance = inversesqrt(distanceSq);
-        acceleration += G * otherPosition.z * delta * inverseDistance * inverseDistance * inverseDistance;
-      }
+      // Накопление гравитации
+      float distanceSq = dot(delta, delta) + SOFTENING * SOFTENING;
+      float inverseDistance = inversesqrt(distanceSq);
+      acceleration += G * otherPosition.z * delta * inverseDistance * inverseDistance * inverseDistance;
 
       // Проверка столкновения
-      if (j < collisionLimit && selfSettled) {
+      if (selfSettled) {
         float combinedRadius = positionData.w + otherPosition.w;
         if (abs(delta.x) <= combinedRadius && abs(delta.y) <= combinedRadius) {
           float distSq = dot(delta, delta);

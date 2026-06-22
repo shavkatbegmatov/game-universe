@@ -397,7 +397,7 @@ canvas.addEventListener("pointerup", (event) => {
       instruction.classList.add("is-hidden");
       audio.playCreation(mass);
     } else {
-      showNotice("Лимит основных тел достигнут (512)");
+      showNotice("Лимит основных тел достигнут (256)");
     }
   }
   endInteraction();
