@@ -1,7 +1,7 @@
-export const TEXTURE_SIZE = 64;
+export const TEXTURE_SIZE = 128;
 export const PARTICLE_COUNT = TEXTURE_SIZE * TEXTURE_SIZE;
-export const MAIN_BODY_COUNT = 256;
-export const FRAGMENTS_PER_EVENT = 15;
+export const MAIN_BODY_COUNT = 512;
+export const FRAGMENTS_PER_EVENT = 30;
 
 const shaderConstants = `
   #define TEX_SIZE ${TEXTURE_SIZE}.0
@@ -50,9 +50,10 @@ const shaderConstants = `
     return len > 0.0001 ? v / len : fallback;
   }
 
+  // Оптимизация: гравитация рассчитывается только от массивных основных тел (MAIN_BODY_COUNT)
   vec2 gravityAcceleration(float selfIndex, vec2 selfPosition) {
     vec2 acceleration = vec2(0.0);
-    for (int j = 0; j < PARTICLE_COUNT; j++) {
+    for (int j = 0; j < int(MAIN_BODY_COUNT); j++) {
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -125,7 +126,9 @@ const shaderConstants = `
     if (selfVelocity.w > 1.0001) return -1.0; // тело ещё «оседает» после рождения
     float partner = -1.0;
     float deepest = 0.0;
+    int limit = selfIndex < MAIN_BODY_COUNT ? PARTICLE_COUNT : int(MAIN_BODY_COUNT);
     for (int j = 0; j < PARTICLE_COUNT; j++) {
+      if (j >= limit) break;
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -495,28 +498,44 @@ export const velocityShader = `
     float partnerIndex = -1.0;
     float deepest = 0.0;
     bool selfSettled = velocityData.w <= 1.0001;
+
+    // Оптимизация: осколки проверяют столкновения только с основными телами
+    int collisionLimit = selfIndex < MAIN_BODY_COUNT ? PARTICLE_COUNT : int(MAIN_BODY_COUNT);
+    // Гравитация учитывает только массивные основные тела
+    int gravityLimit = int(MAIN_BODY_COUNT);
+
     for (int j = 0; j < PARTICLE_COUNT; j++) {
+      if (j >= collisionLimit && j >= gravityLimit) break;
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
       if (otherPosition.z <= 0.0) continue;
       vec2 delta = otherPosition.xy - positionData.xy;
-      float combinedRadius = positionData.w + otherPosition.w;
-      // Партнёр столкновения = глубочайшее проникновение среди «осевших» тел
-      // (тот же критерий, что в deepestPartner — иначе шейдеры рассинхронятся).
-      if (selfSettled && abs(delta.x) <= combinedRadius && abs(delta.y) <= combinedRadius) {
-        float distSq = dot(delta, delta);
-        if (distSq < combinedRadius * combinedRadius) {
-          vec4 otherVel = texture2D(textureVelocity, uvForIndex(otherIndex));
-          if (otherVel.w <= 1.0001) {
-            float penetration = combinedRadius - sqrt(distSq);
-            if (penetration > deepest + 1e-4) { deepest = penetration; partnerIndex = otherIndex; }
+
+      // Накопление гравитации (только от основных тел)
+      if (j < gravityLimit) {
+        float distanceSq = dot(delta, delta) + SOFTENING * SOFTENING;
+        float inverseDistance = inversesqrt(distanceSq);
+        acceleration += G * otherPosition.z * delta * inverseDistance * inverseDistance * inverseDistance;
+      }
+
+      // Проверка столкновения
+      if (j < collisionLimit && selfSettled) {
+        float combinedRadius = positionData.w + otherPosition.w;
+        if (abs(delta.x) <= combinedRadius && abs(delta.y) <= combinedRadius) {
+          float distSq = dot(delta, delta);
+          if (distSq < combinedRadius * combinedRadius) {
+            vec4 otherVel = texture2D(textureVelocity, uvForIndex(otherIndex));
+            if (otherVel.w <= 1.0001) {
+              float penetration = combinedRadius - sqrt(distSq);
+              if (penetration > deepest + 1e-4) {
+                deepest = penetration;
+                partnerIndex = otherIndex;
+              }
+            }
           }
         }
       }
-      float distanceSq = dot(delta, delta) + SOFTENING * SOFTENING;
-      float inverseDistance = inversesqrt(distanceSq);
-      acceleration += G * otherPosition.z * delta * inverseDistance * inverseDistance * inverseDistance;
     }
 
     if (partnerIndex >= 0.0 && isMutualPair(selfIndex, partnerIndex)) {
@@ -537,7 +556,7 @@ export const velocityShader = `
         return;
       }
       if (ratio >= MERGE_RATIO || relativeSpeed >= FRAGMENT_SPEED) {
-        // Слияние сохраняет импульс: масса-взвешенная скорость.
+        // Слияние сохраняет импульс: масса-взвешему скорость.
         if (!survivor) {
           gl_FragColor = vec4(0.0);
           return;
@@ -545,9 +564,7 @@ export const velocityShader = `
         velocityData.xy = (velocityData.xy * positionData.z + otherVelocity.xy * otherPosition.z) /
           (positionData.z + otherPosition.z);
       } else {
-        // Неупругий отскок. Пара взаимна -> импульс симметричен (3-й закон Ньютона),
-        // а e < 1 -> кинетическая энергия только рассеивается. Поэтому скопление
-        // осколков не может само набрать скорость «из пустоты» — источника энергии нет.
+        // Неупругий отскок с физическим импульсом + тангенциальное трение для реализма
         vec2 delta = otherPosition.xy - positionData.xy;
         vec2 fallback = selfIndex < partnerIndex ? vec2(1.0, 0.0) : vec2(-1.0, 0.0);
         vec2 normal = safeDir(delta, fallback);
@@ -556,6 +573,13 @@ export const velocityShader = `
           float restitution = bothMain ? RESTITUTION : RESTITUTION_FRAGMENT;
           float impulse = -(1.0 + restitution) * normalSpeed / (1.0 / positionData.z + 1.0 / otherPosition.z);
           velocityData.xy -= impulse * normal / positionData.z;
+
+          // Тангенциальное трение (физический сдвиг при контакте)
+          vec2 tangent = vec2(-normal.y, normal.x);
+          float tangentSpeed = dot(otherVelocity.xy - velocityData.xy, tangent);
+          float friction = bothMain ? 0.38 : 0.18; // коэффициент трения
+          float tangentImpulse = -tangentSpeed * friction / (1.0 / positionData.z + 1.0 / otherPosition.z);
+          velocityData.xy -= tangentImpulse * tangent / positionData.z;
         }
       }
     }
