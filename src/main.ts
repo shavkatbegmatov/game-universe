@@ -23,6 +23,7 @@ const modeSelectButton = document.querySelector<HTMLButtonElement>("#mode-select
 const soundButton = document.querySelector<HTMLButtonElement>("#sound-button")!;
 const soundIcon = soundButton.querySelector<HTMLElement>(".sound-icon")!;
 const soundLabel = document.querySelector<HTMLElement>("#sound-label")!;
+const fpsCounter = document.querySelector<HTMLElement>("#fps-counter")!;
 
 const timeButtons = document.querySelectorAll<HTMLButtonElement>(".time-btn");
 
@@ -76,6 +77,10 @@ let soundEnabled = false;
 let timeSpeed = 1;
 let selectedCreationPreset: "planet" | "blackhole" = "planet";
 let isDeletingOrClearing = false;
+
+// FPS hisoblash o'zgaruvchilari
+let fpsTime = performance.now();
+let fpsFrames = 0;
 
 function showNotice(message: string): void {
   notice.textContent = message;
@@ -454,6 +459,14 @@ modeCreateButton.addEventListener("click", () => setCursorMode("create"));
 modeSelectButton.addEventListener("click", () => setCursorMode("select"));
 
 function frame(now: number): void {
+  // FPS hisoblash
+  fpsFrames += 1;
+  if (now - fpsTime >= 1000) {
+    fpsCounter.textContent = String(Math.round((fpsFrames * 1000) / (now - fpsTime)));
+    fpsFrames = 0;
+    fpsTime = now;
+  }
+
   // Vaqt tezligi simulyatsiya qadamiga ta'sir qiladi
   const frameTime = Math.min((now - lastTime) / 1000, MAX_FRAME_TIME) * timeSpeed;
   lastTime = now;

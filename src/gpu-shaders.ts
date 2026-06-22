@@ -1,7 +1,7 @@
-export const TEXTURE_SIZE = 128;
+export const TEXTURE_SIZE = 256;
 export const PARTICLE_COUNT = TEXTURE_SIZE * TEXTURE_SIZE;
-export const MAIN_BODY_COUNT = 512;
-export const FRAGMENTS_PER_EVENT = 30;
+export const MAIN_BODY_COUNT = 1024;
+export const FRAGMENTS_PER_EVENT = 60;
 
 const shaderConstants = `
   #define TEX_SIZE ${TEXTURE_SIZE}.0
@@ -126,9 +126,17 @@ const shaderConstants = `
     if (selfVelocity.w > 1.0001) return -1.0; // тело ещё «оседает» после рождения
     float partner = -1.0;
     float deepest = 0.0;
-    int limit = selfIndex < MAIN_BODY_COUNT ? PARTICLE_COUNT : int(MAIN_BODY_COUNT);
+    
+    // Оптимизация: основные тела проверяют всех. Осколки проверяют все основные тела (MAIN_BODY_COUNT)
+    // + скользящее окно из 128 соседних осколков.
+    bool isFragment = selfIndex >= MAIN_BODY_COUNT;
+    int windowStart = isFragment ? int(selfIndex) - 64 : 0;
+    int windowEnd = isFragment ? int(selfIndex) + 64 : int(PARTICLE_COUNT);
+    
     for (int j = 0; j < PARTICLE_COUNT; j++) {
-      if (j >= limit) break;
+      if (isFragment && j >= int(MAIN_BODY_COUNT) && (j < windowStart || j > windowEnd)) {
+        continue;
+      }
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -281,11 +289,26 @@ export const positionShader = `
       float collisionMass = positionData.z + otherPosition.z;
       float collisionEnergy = 0.5 * collisionMass * relativeSpeed * relativeSpeed;
       float collisionFragments = fragmentCount(collisionEnergy, collisionMass);
-      bool doShatter = ratio < MERGE_RATIO && relativeSpeed >= FRAGMENT_SPEED && bothMain
-        && fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments);
+      
+      bool isFragmentCollision = selfIndex >= MAIN_BODY_COUNT || partnerIndex >= MAIN_BODY_COUNT;
+      bool doShatter = ratio < MERGE_RATIO && relativeSpeed >= FRAGMENT_SPEED && 
+        (bothMain ? fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments) : isFragmentCollision);
+
       if (doShatter) {
-        gl_FragColor = vec4(0.0);
-        return;
+        if (bothMain) {
+          gl_FragColor = vec4(0.0);
+          return;
+        } else {
+          // Осколок крошится дальше: уменьшаем его массу и радиус
+          float newMass = positionData.z * 0.45;
+          if (newMass < 0.25) {
+            gl_FragColor = vec4(0.0);
+            return;
+          }
+          float newRadius = sqrt(newMass / MASS_DENSITY);
+          gl_FragColor = vec4(positionData.xy, newMass, newRadius);
+          return;
+        }
       }
       if (ratio >= MERGE_RATIO || relativeSpeed >= FRAGMENT_SPEED) {
         // Слияние: масса всегда переходит к выжившему, ничто не исчезает бесследно.
@@ -499,13 +522,16 @@ export const velocityShader = `
     float deepest = 0.0;
     bool selfSettled = velocityData.w <= 1.0001;
 
-    // Оптимизация: осколки проверяют столкновения только с основными телами
-    int collisionLimit = selfIndex < MAIN_BODY_COUNT ? PARTICLE_COUNT : int(MAIN_BODY_COUNT);
-    // Гравитация учитывает только массивные основные тела
-    int gravityLimit = int(MAIN_BODY_COUNT);
+    // Оптимизация: основные тела проверяют всех. Осколки проверяют все основные тела (MAIN_BODY_COUNT)
+    // + скользящее окно из 128 соседних осколков.
+    bool isFragment = selfIndex >= MAIN_BODY_COUNT;
+    int windowStart = isFragment ? int(selfIndex) - 64 : 0;
+    int windowEnd = isFragment ? int(selfIndex) + 64 : int(PARTICLE_COUNT);
 
     for (int j = 0; j < PARTICLE_COUNT; j++) {
-      if (j >= collisionLimit && j >= gravityLimit) break;
+      if (isFragment && j >= int(MAIN_BODY_COUNT) && (j < windowStart || j > windowEnd)) {
+        continue;
+      }
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -513,7 +539,7 @@ export const velocityShader = `
       vec2 delta = otherPosition.xy - positionData.xy;
 
       // Накопление гравитации (только от основных тел)
-      if (j < gravityLimit) {
+      if (j < int(MAIN_BODY_COUNT)) {
         float distanceSq = dot(delta, delta) + SOFTENING * SOFTENING;
         float inverseDistance = inversesqrt(distanceSq);
         acceleration += G * otherPosition.z * delta * inverseDistance * inverseDistance * inverseDistance;
@@ -549,11 +575,26 @@ export const velocityShader = `
       float collisionMass = positionData.z + otherPosition.z;
       float collisionEnergy = 0.5 * collisionMass * relativeSpeed * relativeSpeed;
       float collisionFragments = fragmentCount(collisionEnergy, collisionMass);
-      bool doShatter = ratio < MERGE_RATIO && relativeSpeed >= FRAGMENT_SPEED && bothMain
-        && fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments);
+      
+      bool isFragmentCollision = selfIndex >= MAIN_BODY_COUNT || partnerIndex >= MAIN_BODY_COUNT;
+      bool doShatter = ratio < MERGE_RATIO && relativeSpeed >= FRAGMENT_SPEED && 
+        (bothMain ? fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments) : isFragmentCollision);
+
       if (doShatter) {
-        gl_FragColor = vec4(0.0);
-        return;
+        if (bothMain) {
+          gl_FragColor = vec4(0.0);
+          return;
+        } else {
+          // Осколок крошится дальше: отскок на высокой скорости в сторону сброса энергии
+          vec2 centerVelocity = (velocityData.xy * positionData.z + otherVelocity.xy * otherPosition.z) / (positionData.z + otherPosition.z);
+          vec2 impactNormal = safeDir(otherPosition.xy - positionData.xy, vec2(1.0, 0.0));
+          float seed = hash11(selfIndex * 3.7 + u_time * 1.3);
+          float angle = atan(impactNormal.y, impactNormal.x) + 1.57 + (seed - 0.5) * 2.0;
+          vec2 burst = vec2(cos(angle), sin(angle)) * (FRAGMENT_SPEED * 0.35 * (0.6 + 0.8 * seed));
+          
+          gl_FragColor = vec4(centerVelocity + burst, 12.0, 1.35); // сброс жизни
+          return;
+        }
       }
       if (ratio >= MERGE_RATIO || relativeSpeed >= FRAGMENT_SPEED) {
         // Слияние сохраняет импульс: масса-взвешему скорость.
