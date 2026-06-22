@@ -1,7 +1,7 @@
-export const TEXTURE_SIZE = 128;
+export const TEXTURE_SIZE = 64;
 export const PARTICLE_COUNT = TEXTURE_SIZE * TEXTURE_SIZE;
 export const MAIN_BODY_COUNT = 256;
-export const FRAGMENTS_PER_EVENT = 40;
+export const FRAGMENTS_PER_EVENT = 15;
 
 const shaderConstants = `
   #define TEX_SIZE ${TEXTURE_SIZE}.0
@@ -50,10 +50,10 @@ const shaderConstants = `
     return len > 0.0001 ? v / len : fallback;
   }
 
-  // Оптимизация: гравитация рассчитывается только от массивных основных тел (MAIN_BODY_COUNT)
+  // Гравитация рассчитывается от всех активных тел (PARTICLE_COUNT)
   vec2 gravityAcceleration(float selfIndex, vec2 selfPosition) {
     vec2 acceleration = vec2(0.0);
-    for (int j = 0; j < int(MAIN_BODY_COUNT); j++) {
+    for (int j = 0; j < PARTICLE_COUNT; j++) {
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -127,9 +127,8 @@ const shaderConstants = `
     float partner = -1.0;
     float deepest = 0.0;
     
-    // Оптимизация: все тела проверяют столкновения только с основными телами (MAIN_BODY_COUNT).
-    // Это исключает лаги и позволяет поддерживать 16,384 частиц на 60 FPS.
-    for (int j = 0; j < int(MAIN_BODY_COUNT); j++) {
+    // Столкновения проверяются со всеми активными телами (PARTICLE_COUNT).
+    for (int j = 0; j < PARTICLE_COUNT; j++) {
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));
@@ -341,20 +340,21 @@ export const fullscreenVertexShader = `
 `;
 
 // Сетка «ткани пространства-времени». u_gridOffset привязывает её к камере (узлы
-// в мировых координатах, но сетка всегда покрывает экран при панорамировании).
+// в мировых координатах, но сетка always покрывает экран при панорамировании).
 export const gridVertexShader = `
   uniform sampler2D u_positions;
   uniform float u_warp;
   uniform vec2 u_gridOffset;
+  uniform float u_gridStep;
   varying float vPotential;
   vec2 uvForIndex(float index) {
     return (vec2(mod(index, ${TEXTURE_SIZE}.0), floor(index / ${TEXTURE_SIZE}.0)) + 0.5) / ${TEXTURE_SIZE}.0;
   }
   void main() {
-    vec2 world = position.xy + u_gridOffset;   // мировая позиция узла
+    vec2 world = position.xy * u_gridStep + u_gridOffset;   // мировая позиция узла
     vec2 pull = vec2(0.0);
     float potential = 0.0;
-    for (int i = 0; i < ${MAIN_BODY_COUNT}; i++) {
+    for (int i = 0; i < ${PARTICLE_COUNT}; i++) {
       vec4 body = texture2D(u_positions, uvForIndex(float(i)));
       if (body.z <= 0.0) continue;
       vec2 delta = body.xy - world;            // от узла К телу
@@ -515,8 +515,8 @@ export const velocityShader = `
     float deepest = 0.0;
     bool selfSettled = velocityData.w <= 1.0001;
 
-    // Оптимизация: проверяем столкновения и гравитацию только с основными телами (MAIN_BODY_COUNT)
-    for (int j = 0; j < int(MAIN_BODY_COUNT); j++) {
+    // Накопление гравитации и проверка столкновения со всеми активными телами (PARTICLE_COUNT)
+    for (int j = 0; j < PARTICLE_COUNT; j++) {
       float otherIndex = float(j);
       if (abs(otherIndex - selfIndex) < 0.5) continue;
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(otherIndex));

@@ -35,10 +35,9 @@ const MASS_DENSITY = 0.15;
 // Вспышка столкновения: размер пула и длительность (в симуляционном времени).
 const FLASH_POOL_SIZE = 16;
 const FLASH_DURATION = 0.7;
-// Сетка пространства-времени: охват/шаг в мире и сила искривления. Сетка
+// Сетка пространства-времени: количество линий и сила искривления. Сетка
 // привязана к камере (см. u_gridOffset), поэтому охвата хватает на любой панораме.
-const GRID_SPAN = 4200;
-const GRID_STEP = 150;
+const GRID_COUNT = 80;
 const GRID_WARP = 22.0;
 // Доля следа, сохраняемая каждый кадр: ниже — короче хвосты, выше — длиннее.
 const TRAIL_FADE = 0.95;
@@ -328,14 +327,14 @@ export class GPUEngine {
   // шейдере под действием тел. Живёт в своей сцене, рисуется под телами.
   private createGrid(): THREE.LineSegments {
     const positions: number[] = [];
-    for (let y = -GRID_SPAN; y <= GRID_SPAN; y += GRID_STEP) {
-      for (let x = -GRID_SPAN; x < GRID_SPAN; x += GRID_STEP) {
-        positions.push(x, y, 0, x + GRID_STEP, y, 0);
+    for (let y = -GRID_COUNT; y <= GRID_COUNT; y++) {
+      for (let x = -GRID_COUNT; x < GRID_COUNT; x++) {
+        positions.push(x, y, 0, x + 1, y, 0);
       }
     }
-    for (let x = -GRID_SPAN; x <= GRID_SPAN; x += GRID_STEP) {
-      for (let y = -GRID_SPAN; y < GRID_SPAN; y += GRID_STEP) {
-        positions.push(x, y, 0, x, y + GRID_STEP, 0);
+    for (let x = -GRID_COUNT; x <= GRID_COUNT; x++) {
+      for (let y = -GRID_COUNT; y < GRID_COUNT; y++) {
+        positions.push(x, y, 0, x, y + 1, 0);
       }
     }
     const geometry = new THREE.BufferGeometry();
@@ -344,6 +343,7 @@ export class GPUEngine {
       u_positions: { value: this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture },
       u_warp: { value: GRID_WARP },
       u_gridOffset: { value: new THREE.Vector2(0, 0) },
+      u_gridStep: { value: 150 },
       u_color: { value: new THREE.Color(0x9a9ca0) },
     };
     const material = new THREE.ShaderMaterial({
@@ -535,8 +535,11 @@ export class GPUEngine {
     //     (snap к шагу) делает сетку видимой везде при панорамировании на любые расстояния.
     if (this.gridUniforms) {
       this.gridUniforms.u_positions.value = this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
-      const snapX = Math.round(cameraState.x / GRID_STEP) * GRID_STEP;
-      const snapY = Math.round(cameraState.y / GRID_STEP) * GRID_STEP;
+      const zoom = cameraState.zoom;
+      const currentStep = 150 * Math.pow(2, Math.floor(Math.log2(1 / zoom)));
+      this.gridUniforms.u_gridStep.value = currentStep;
+      const snapX = Math.round(cameraState.x / currentStep) * currentStep;
+      const snapY = Math.round(cameraState.y / currentStep) * currentStep;
       (this.gridUniforms.u_gridOffset.value as THREE.Vector2).set(snapX, snapY);
     }
     this.renderer.render(this.gridScene, this.camera);
