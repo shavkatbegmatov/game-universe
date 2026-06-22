@@ -22,6 +22,15 @@
             <span class="stat-label">Объекты</span>
             <strong id="planet-count">0</strong>
           </div>
+          <button class="sound-button" id="sound-button" type="button" aria-pressed="false" title="Звуковые эффекты">
+            <span class="sound-icon" aria-hidden="true">🔈</span>
+            <span id="sound-label">Звук: Выкл</span>
+          </button>
+          <div class="time-warp-controls" role="group" aria-label="Скорость симуляции">
+            <button type="button" class="time-btn is-active" data-speed="1">1x</button>
+            <button type="button" class="time-btn" data-speed="2">2x</button>
+            <button type="button" class="time-btn" data-speed="5">5x</button>
+          </div>
           <button class="pause-button" id="pause-button" type="button" aria-pressed="false">
             <span class="pause-icon" aria-hidden="true"><i></i><i></i></span>
             <span id="pause-label">Пауза</span>
@@ -66,6 +75,19 @@
 
           <span class="tool-sep" aria-hidden="true"></span>
 
+          <div class="tool-presets" role="group" aria-label="Тип создаваемого тела">
+            <button type="button" class="preset-btn is-active" id="preset-planet" data-preset="planet" aria-pressed="true" title="Обычная планета">
+              <span class="preset-dot planet-color-dot" aria-hidden="true"></span>
+              <span>Планета</span>
+            </button>
+            <button type="button" class="preset-btn" id="preset-blackhole" data-preset="blackhole" aria-pressed="false" title="Черная дыра (сильная гравитация)">
+              <span class="preset-dot blackhole-color-dot" aria-hidden="true"></span>
+              <span>Черная Дыра</span>
+            </button>
+          </div>
+
+          <span class="tool-sep" aria-hidden="true"></span>
+
           <div class="tool-readout">
             <span class="tool-readout-label">Масштаб</span>
             <strong id="zoom-value">100%</strong>
@@ -93,6 +115,18 @@
         </div>
         <span class="live-indicator" title="Данные обновляются в реальном времени"></span>
       </div>
+
+      <div class="sidebar-section">
+        <p class="sidebar-eyebrow">Сценарии</p>
+        <div class="scenario-controls">
+          <button type="button" class="scenario-btn" id="scenario-solar" title="Загрузить Солнечную систему">Солн. Система</button>
+          <button type="button" class="scenario-btn" id="scenario-binary" title="Загрузить двойную звезду">Двойная Звезда</button>
+          <button type="button" class="scenario-btn" id="scenario-chaos" title="Загрузить случайный хаос">Хаос</button>
+          <button type="button" class="scenario-btn" id="scenario-clear" title="Удалить все небесные тела">Очистить все</button>
+        </div>
+      </div>
+
+      <div class="sidebar-sep"></div>
 
       <div class="bodies-list" id="bodies-list"></div>
       <div class="empty-bodies" id="empty-bodies">

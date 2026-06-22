@@ -28,7 +28,7 @@ export type BodySnapshot = {
   isFragment: boolean;
 };
 
-type Injection = { slot: number; position: Vec2; velocity: Vec2; radius: number };
+type Injection = { slot: number; position: Vec2; velocity: Vec2; radius: number; customMass?: number };
 type Flash = { glow: THREE.Mesh; ring: THREE.Mesh; active: boolean; start: number; x: number; y: number; strength: number };
 
 const MASS_DENSITY = 0.15;
@@ -141,6 +141,7 @@ export class GPUEngine {
         varying vec3 vBodyColor;
         varying vec2 vBodyLocal;
         varying float vSelected;
+        varying float vIsBlackHole;
         // Цвет «по температуре»: холодный тёмно-красный -> оранжевый -> тёпло-белый
         // -> горячий голубовато-белый (как излучение чёрного тела).
         vec3 heatColor(float t) {
@@ -177,6 +178,7 @@ export class GPUEngine {
           vBodyLocal = position.xy;
           // Подсветка только в экранном проходе (в след — нет).
           vSelected = (uTrailMode < 0.5 && abs(slotIndex - uSelectedSlot) < 0.5) ? 1.0 : 0.0;
+          vIsBlackHole = step(20000.0, gpuPosition.z);
         `,
       );
       shader.fragmentShader = `
@@ -184,6 +186,7 @@ export class GPUEngine {
         varying vec3 vBodyColor;
         varying vec2 vBodyLocal;
         varying float vSelected;
+        varying float vIsBlackHole;
       ` + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace(
         "vec4 diffuseColor = vec4( diffuse, opacity );",
@@ -201,6 +204,19 @@ export class GPUEngine {
             bodyAlphaOut = max(bodyAlphaOut, ring * vBodyAlpha);
           }
           vec4 diffuseColor = vec4(shadedBodyColor, bodyAlphaOut);
+
+          if (vIsBlackHole > 0.5) {
+            float r = length(vBodyLocal);
+            if (r < 0.35) {
+              // Черная сингулярность в центре
+              diffuseColor = vec4(0.01, 0.01, 0.02, vBodyAlpha);
+            } else {
+              // Аккреционный диск - неоновый фиолетово-оранжевый
+              float diskFactor = smoothstep(0.35, 0.48, r) * (1.0 - smoothstep(0.48, 1.0, r));
+              vec3 diskColor = mix(vec3(0.7, 0.2, 1.0), vec3(1.0, 0.4, 0.0), smoothstep(0.35, 1.0, r));
+              diffuseColor = vec4(diskColor * 1.8, diskFactor * 0.95 * vBodyAlpha);
+            }
+          }
         `,
       );
     };
@@ -221,10 +237,13 @@ export class GPUEngine {
     this.previewRing.visible = false;
     this.scene.add(this.preview, this.previewRing);
 
-    // Сплошная линия вектора (не пунктир — пунктир пропадал на разных zoom).
+    // Сплошная линия траектории (расчет траектории на CPU по точкам).
+    const predictionPoints = new Float32Array(120 * 3);
+    const lineGeometry = new THREE.BufferGeometry();
+    lineGeometry.setAttribute("position", new THREE.BufferAttribute(predictionPoints, 3));
     this.vectorLine = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-      new THREE.LineBasicMaterial({ color: 0x9fe1ff, transparent: true, opacity: 0.95, depthTest: false }),
+      lineGeometry,
+      new THREE.LineBasicMaterial({ color: 0x62c8ff, transparent: true, opacity: 0.65, depthTest: false }),
     );
     this.vectorLine.visible = false;
     this.vectorLine.frustumCulled = false;
@@ -378,7 +397,7 @@ export class GPUEngine {
     this.hasPreviousCamera = false;
   }
 
-  injectBody(position: Vec2, velocity: Vec2, radius: number): number | null {
+  injectBody(position: Vec2, velocity: Vec2, radius: number, customMass?: number): number | null {
     let slot = -1;
     for (let index = 0; index < MAIN_BODY_COUNT; index += 1) {
       if (!this.occupiedMain[index] && !this.pendingDeletionMain[index]) {
@@ -388,7 +407,7 @@ export class GPUEngine {
     }
     if (slot < 0) return null;
     this.occupiedMain[slot] = 1;
-    this.injectionQueue.push({ slot, position: { ...position }, velocity: { ...velocity }, radius });
+    this.injectionQueue.push({ slot, position: { ...position }, velocity: { ...velocity }, radius, customMass });
     return slot;
   }
 
@@ -471,7 +490,7 @@ export class GPUEngine {
     return true;
   }
 
-  render(cameraState: CameraState, preview: CreationPreview | null): void {
+  render(cameraState: CameraState, preview: CreationPreview | null, snapshots: BodySnapshot[] = []): void {
     this.syncCamera(cameraState);
     if (this.particleUniforms) {
       this.particleUniforms.texturePosition.value = this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
@@ -523,7 +542,7 @@ export class GPUEngine {
     this.renderer.render(this.gridScene, this.camera);
 
     // 4. Чёткие тела и превью поверх следа.
-    this.updatePreview(preview, cameraState.zoom);
+    this.updatePreview(preview, cameraState.zoom, snapshots);
     this.renderer.render(this.scene, this.camera);
 
     // 5. Вспышки столкновений поверх всего (отдельная сцена -> в след не попадают).
@@ -621,7 +640,7 @@ export class GPUEngine {
     uniforms.u_deleteSlot.value = deletion ?? -1;
     uniforms.u_injectSlot.value = injection?.slot ?? -1;
     if (injection) {
-      const mass = injection.radius * injection.radius * MASS_DENSITY;
+      const mass = injection.customMass !== undefined ? injection.customMass : injection.radius * injection.radius * MASS_DENSITY;
       (uniforms.u_injectPosition.value as THREE.Vector4).set(
         injection.position.x,
         injection.position.y,
@@ -674,7 +693,7 @@ export class GPUEngine {
     this.camera.updateProjectionMatrix();
   }
 
-  private updatePreview(preview: CreationPreview | null, zoom: number): void {
+  private updatePreview(preview: CreationPreview | null, zoom: number, snapshots: BodySnapshot[]): void {
     if (!preview) {
       this.hidePreview();
       return;
@@ -691,12 +710,41 @@ export class GPUEngine {
     this.vectorLine.visible = hasVector;
     this.vectorArrow.visible = hasVector;
     if (preview.vectorEnd) {
-      // Линия гарантированно от точки старта до конца (в координатах сцены, y инвертирован).
+      // Расчет траектории движения нового тела на CPU
       const positions = this.vectorLine.geometry.getAttribute("position") as THREE.BufferAttribute;
-      positions.setXYZ(0, preview.position.x, -preview.position.y, 0.35);
-      positions.setXYZ(1, preview.vectorEnd.x, -preview.vectorEnd.y, 0.35);
+      let px = preview.position.x;
+      let py = preview.position.y;
+      let vx = (preview.vectorEnd.x - preview.position.x) * 0.7; // VELOCITY_SCALE = 0.7
+      let vy = (preview.vectorEnd.y - preview.position.y) * 0.7;
+
+      const predictionSteps = 120;
+      const predictionDt = 0.12; // шаг времени для прогноза
+
+      for (let i = 0; i < predictionSteps; i++) {
+        positions.setXYZ(i, px, -py, 0.35);
+
+        // Влияние гравитации всех существующих тел
+        let ax = 0;
+        let ay = 0;
+        for (const body of snapshots) {
+          const dx = body.position.x - px;
+          const dy = body.position.y - py;
+          const distSq = dx * dx + dy * dy + 12.0 * 12.0; // SOFTENING = 12.0
+          const dist = Math.sqrt(distSq);
+          const f = (9500.0 * body.mass) / (distSq * dist); // G = 9500.0
+          ax += f * dx;
+          ay += f * dy;
+        }
+
+        // Обновление положения и скорости
+        px += vx * predictionDt;
+        py += vy * predictionDt;
+        vx += ax * predictionDt;
+        vy += ay * predictionDt;
+      }
       positions.needsUpdate = true;
-      // Наконечник на конце, повёрнут вдоль вектора; экранный размер постоянный (не зависит от zoom).
+
+      // Наконечник стрелки
       const dx = preview.vectorEnd.x - preview.position.x;
       const dy = -(preview.vectorEnd.y - preview.position.y);
       this.vectorArrow.position.set(preview.vectorEnd.x, -preview.vectorEnd.y, 0.36);
