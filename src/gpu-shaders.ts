@@ -291,12 +291,8 @@ export const positionShader = `
           gl_FragColor = vec4(0.0);
           return;
         } else {
-          // Осколок крошится дальше: уменьшаем его массу и радиус
+          // Осколок крошится дальше (бесконечная рекурсия): уменьшаем его массу и радиус без нижнего порога
           float newMass = positionData.z * 0.45;
-          if (newMass < 0.25) {
-            gl_FragColor = vec4(0.0);
-            return;
-          }
           float newRadius = sqrt(newMass / MASS_DENSITY);
           gl_FragColor = vec4(positionData.xy, newMass, newRadius);
           return;
