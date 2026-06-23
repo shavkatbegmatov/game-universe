@@ -67,6 +67,12 @@ test("luminous bodies render a corona via an enlarged quad", () => {
   assert.match(engine, /float surface = 1\.0 \/ vGlowScale/);
 });
 
+test("rocky and gas-giant surfaces get per-body procedural detail", () => {
+  assert.match(engine, /varying float vSeed/);
+  assert.match(engine, /float vnoise\(vec2 p\)/);
+  assert.match(engine, /vSeed = fract\(sin\(slotIndex/);
+});
+
 test("object types form a registry and derive mass from density", () => {
   assert.match(objectTypes, /export const OBJECT_TYPES/);
   assert.match(objectTypes, /return type\.density \* radius \* radius/); // massFor

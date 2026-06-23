@@ -144,6 +144,7 @@ export class GPUEngine {
         varying float vSelected;
         varying float vDensity;
         varying float vGlowScale;
+        varying float vSeed;
         // Цвет «по температуре»: холодный тёмно-красный -> оранжевый -> тёпло-белый
         // -> горячий голубовато-белый (как излучение чёрного тела).
         vec3 heatColor(float t) {
@@ -189,6 +190,8 @@ export class GPUEngine {
           float fragmentAlpha = gpuVelocity.z > 0.0 ? smoothstep(0.0, 3.0, gpuVelocity.z) : 1.0;
           vBodyAlpha = bodyActive * fragmentAlpha;
           vBodyLocal = position.xy;
+          // Постоянный «случайный» сид на тело: газовые гиганты и планеты не похожи.
+          vSeed = fract(sin(slotIndex * 12.9898) * 43758.5453);
           // Подсветка только в экранном проходе (в след — нет).
           vSelected = (uTrailMode < 0.5 && abs(slotIndex - uSelectedSlot) < 0.5) ? 1.0 : 0.0;
         `,
@@ -200,6 +203,19 @@ export class GPUEngine {
         varying float vSelected;
         varying float vDensity;
         varying float vGlowScale;
+        varying float vSeed;
+        // Дешёвый value-noise для шероховатой поверхности каменистых тел и пятен.
+        float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float a = hash21(i);
+          float b = hash21(i + vec2(1.0, 0.0));
+          float c = hash21(i + vec2(0.0, 1.0));
+          float d = hash21(i + vec2(1.0, 1.0));
+          return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
       ` + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace(
         "vec4 diffuseColor = vec4( diffuse, opacity );",
@@ -244,10 +260,21 @@ export class GPUEngine {
             vec3 starColor = mix(vBodyColor, vec3(1.0, 0.95, 0.82), core * 0.6);
             diffuseColor = vec4(starColor * (1.25 + core * 0.6), bodyEdge * vBodyAlpha);
           } else if (vDensity < 0.09) {
-            // Газовый гигант: полосатый, рыхлый, с мягким краем.
-            float bands = 0.5 + 0.5 * sin(local.y * 9.0);
+            // Газовый гигант: полосы (фаза/частота зависят от тела) + пятно-шторм.
+            float bands = 0.5 + 0.5 * sin(local.y * (7.0 + vSeed * 5.0) + vSeed * 6.2831);
             vec3 ggBase = mix(shadedBodyColor, vec3(0.85, 0.72, 0.55), 0.45);
-            diffuseColor = vec4(ggBase * mix(0.8, 1.12, bands), bodyEdge * vBodyAlpha * 0.92);
+            ggBase *= mix(0.8, 1.12, bands);
+            // Большое пятно-шторм: смещённый овал, положение чуть варьируется по сиду.
+            vec2 spot = (local - vec2(0.3, -0.18 + (vSeed - 0.5) * 0.3)) * vec2(1.0, 1.7);
+            float storm = 1.0 - smoothstep(0.0, 0.32, length(spot));
+            ggBase = mix(ggBase, vec3(0.78, 0.34, 0.24), storm * 0.55);
+            diffuseColor = vec4(ggBase, bodyEdge * vBodyAlpha * 0.92);
+          } else {
+            // Каменистое тело (планета/астероид): шероховатая «каменная» поверхность.
+            float n = vnoise(local * 3.5 + vSeed * 41.0);
+            float n2 = vnoise(local * 8.0 - vSeed * 17.0);
+            vec3 rockColor = shadedBodyColor * (0.82 + 0.30 * n + 0.08 * n2);
+            diffuseColor = vec4(rockColor, bodyEdge * vBodyAlpha);
           }
 
           // Корона/ореол светящихся тел: мягкое свечение ЗА поверхностью тела
@@ -272,7 +299,7 @@ export class GPUEngine {
         `,
       );
     };
-    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v5";
+    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v6";
     const particles = new THREE.Mesh(geometry, this.particleMaterial);
     particles.frustumCulled = false;
     this.scene.add(particles);
