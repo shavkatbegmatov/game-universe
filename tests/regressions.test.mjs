@@ -52,13 +52,19 @@ test("each body exposes a real density derived from mass and radius", () => {
 });
 
 test("rendering classifies bodies by a density ladder, not raw mass", () => {
-  assert.match(engine, /vDensity = gpuPosition\.z \/ max\(gpuPosition\.w \* gpuPosition\.w/);
+  assert.match(engine, /density = gpuPosition\.z \/ max\(gpuPosition\.w \* gpuPosition\.w/);
   assert.match(engine, /vDensity >= 120\.0/); // чёрная дыра
   assert.match(engine, /vDensity >= 45\.0/); // нейтронная звезда
   assert.match(engine, /vDensity >= 4\.0/); // белый карлик
   assert.match(engine, /vDensity >= 0\.3/); // звезда
   assert.match(engine, /vDensity < 0\.09/); // газовый гигант
   assert.doesNotMatch(engine, /step\(20000\.0, gpuPosition\.z\)/);
+});
+
+test("luminous bodies render a corona via an enlarged quad", () => {
+  assert.match(engine, /varying float vGlowScale/);
+  assert.match(engine, /gpuPosition\.w \* glowScale/); // увеличенный квадрат под ореол
+  assert.match(engine, /float surface = 1\.0 \/ vGlowScale/);
 });
 
 test("object types form a registry and derive mass from density", () => {
