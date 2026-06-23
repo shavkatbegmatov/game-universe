@@ -1,4 +1,5 @@
 import type { BodySnapshot } from "./gpu-engine";
+import { classifyByDensity } from "./object-types";
 
 function formatNumber(value: number, digits = 1): string {
   const safeValue = Math.abs(value) < 0.05 ? 0 : value;
@@ -9,6 +10,8 @@ const STAR_ICON = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="
 
 type CardRefs = {
   card: HTMLElement;
+  name: HTMLElement;
+  dot: HTMLElement;
   mass: HTMLElement;
   density: HTMLElement;
   radius: HTMLElement;
@@ -124,6 +127,12 @@ export class BodiesSidebar {
 
   private updateValues(refs: CardRefs, body: BodySnapshot): void {
     const speed = Math.hypot(body.velocity.x, body.velocity.y);
+    // Тип восстанавливается из плотности и может меняться при аккреции (планета,
+    // поглотив достаточно массы, станет звездой и т.д.) — обновляем каждый кадр.
+    const type = classifyByDensity(body.density, body.radius);
+    refs.name.textContent = type.name;
+    refs.card.title = type.hint;
+    refs.dot.style.setProperty("--type-accent", type.accent);
     refs.mass.textContent = formatNumber(body.mass, 2);
     refs.density.textContent = formatNumber(body.density, 2);
     refs.radius.textContent = formatNumber(body.radius, 1);
@@ -150,8 +159,8 @@ export class BodiesSidebar {
     card.innerHTML = `
       <div class="body-card-heading">
         <button class="focus-body" type="button" aria-label="Сфокусировать камеру на ${body.name}">
-          <span class="body-color" style="--body-hue: ${body.hue}"></span>
-          <strong>${body.name}</strong>
+          <span class="body-color"></span>
+          <strong class="body-name"></strong>
         </button>
         <button class="favorite-toggle" type="button" aria-pressed="false" aria-label="В избранное" title="В избранное">${STAR_ICON}</button>
         <button class="delete-body" type="button" aria-label="Удалить ${body.name}" title="Удалить"><span aria-hidden="true">×</span></button>
@@ -166,6 +175,8 @@ export class BodiesSidebar {
 
     const refs: CardRefs = {
       card,
+      name: card.querySelector<HTMLElement>(".body-name")!,
+      dot: card.querySelector<HTMLElement>(".body-color")!,
       mass: card.querySelector<HTMLElement>(".metric-mass")!,
       density: card.querySelector<HTMLElement>(".metric-density")!,
       radius: card.querySelector<HTMLElement>(".metric-radius")!,

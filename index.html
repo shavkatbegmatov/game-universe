@@ -79,19 +79,6 @@
 
           <span class="tool-sep" aria-hidden="true"></span>
 
-          <div class="tool-presets" role="group" aria-label="Тип создаваемого тела">
-            <button type="button" class="preset-btn is-active" id="preset-planet" data-preset="planet" aria-pressed="true" title="Обычная планета">
-              <span class="preset-dot planet-color-dot" aria-hidden="true"></span>
-              <span>Планета</span>
-            </button>
-            <button type="button" class="preset-btn" id="preset-blackhole" data-preset="blackhole" aria-pressed="false" title="Черная дыра (сильная гравитация)">
-              <span class="preset-dot blackhole-color-dot" aria-hidden="true"></span>
-              <span>Черная Дыра</span>
-            </button>
-          </div>
-
-          <span class="tool-sep" aria-hidden="true"></span>
-
           <div class="tool-readout">
             <span class="tool-readout-label">Масштаб</span>
             <strong id="zoom-value">100%</strong>
@@ -119,6 +106,25 @@
         </div>
         <span class="live-indicator" title="Данные обновляются в реальном времени"></span>
       </div>
+
+      <div class="sidebar-section">
+        <p class="sidebar-eyebrow">Тип тела</p>
+        <div class="type-palette" id="type-palette" role="group" aria-label="Тип создаваемого тела"></div>
+        <div class="inspector" id="inspector" aria-live="polite">
+          <div class="inspector-head">
+            <span class="inspector-dot" id="inspector-dot" aria-hidden="true"></span>
+            <strong id="inspector-name">—</strong>
+          </div>
+          <dl class="inspector-metrics">
+            <div><dt>Радиус</dt><dd id="inspector-radius">—</dd></div>
+            <div><dt>Масса</dt><dd id="inspector-mass">—</dd></div>
+            <div><dt>Плотность</dt><dd id="inspector-density">—</dd></div>
+          </dl>
+          <p class="inspector-hint" id="inspector-hint"></p>
+        </div>
+      </div>
+
+      <div class="sidebar-sep"></div>
 
       <div class="sidebar-section">
         <p class="sidebar-eyebrow">Сценарии</p>

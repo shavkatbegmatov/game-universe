@@ -142,7 +142,7 @@ export class GPUEngine {
         varying vec3 vBodyColor;
         varying vec2 vBodyLocal;
         varying float vSelected;
-        varying float vIsBlackHole;
+        varying float vDensity;
         // Цвет «по температуре»: холодный тёмно-красный -> оранжевый -> тёпло-белый
         // -> горячий голубовато-белый (как излучение чёрного тела).
         vec3 heatColor(float t) {
@@ -179,10 +179,10 @@ export class GPUEngine {
           vBodyLocal = position.xy;
           // Подсветка только в экранном проходе (в след — нет).
           vSelected = (uTrailMode < 0.5 && abs(slotIndex - uSelectedSlot) < 0.5) ? 1.0 : 0.0;
-          // Чёрная дыра определяется ПЛОТНОСТЬЮ (mass / r^2), а не массой: огромная
-          // слившаяся звезда больше не выглядит как чёрная дыра, а ЧД остаётся ЧД.
-          float bodyDensity = gpuPosition.z / max(gpuPosition.w * gpuPosition.w, 1e-6);
-          vIsBlackHole = step(45.0, bodyDensity);
+          // Внешний вид выбирается по ПЛОТНОСТИ (mass / r^2), а не по массе: газовый
+          // гигант -> планета -> звезда -> белый карлик -> нейтронная звезда -> чёрная
+          // дыра. Пороги band'ов совпадают с DENSITY_BANDS в object-types.ts.
+          vDensity = gpuPosition.z / max(gpuPosition.w * gpuPosition.w, 1e-6);
         `,
       );
       shader.fragmentShader = `
@@ -190,41 +190,64 @@ export class GPUEngine {
         varying vec3 vBodyColor;
         varying vec2 vBodyLocal;
         varying float vSelected;
-        varying float vIsBlackHole;
+        varying float vDensity;
       ` + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace(
         "vec4 diffuseColor = vec4( diffuse, opacity );",
         `
           float bodyRadiusSq = dot(vBodyLocal, vBodyLocal);
           if (bodyRadiusSq > 1.0) discard;
+          float r = sqrt(bodyRadiusSq);
           float bodyEdge = 1.0 - smoothstep(0.68, 1.0, bodyRadiusSq);
           float bodyHighlight = 1.0 - smoothstep(0.0, 0.46, length(vBodyLocal + vec2(0.28, 0.30)));
           vec3 shadedBodyColor = vBodyColor + bodyHighlight * 0.42;
-          float bodyAlphaOut = vBodyAlpha * bodyEdge;
-          if (vSelected > 0.5) {
-            // Яркое кольцо по краю выбранного тела + лёгкое осветление.
-            float ring = smoothstep(0.52, 0.7, bodyRadiusSq);
-            shadedBodyColor = mix(shadedBodyColor + 0.12, vec3(1.0), ring * 0.85);
-            bodyAlphaOut = max(bodyAlphaOut, ring * vBodyAlpha);
-          }
-          vec4 diffuseColor = vec4(shadedBodyColor, bodyAlphaOut);
+          // Базовый вид — каменистое тело (планета/астероид). Дальше внешность зависит
+          // от ПЛОТНОСТИ: те же пороги, что DENSITY_BANDS в object-types.ts.
+          vec4 diffuseColor = vec4(shadedBodyColor, vBodyAlpha * bodyEdge);
 
-          if (vIsBlackHole > 0.5) {
-            float r = length(vBodyLocal);
+          if (vDensity >= 120.0) {
+            // Чёрная дыра: тёмная сингулярность + аккреционный диск.
             if (r < 0.35) {
-              // Черная сингулярность в центре
               diffuseColor = vec4(0.01, 0.01, 0.02, vBodyAlpha);
             } else {
-              // Аккреционный диск - неоновый фиолетово-оранжевый
               float diskFactor = smoothstep(0.35, 0.48, r) * (1.0 - smoothstep(0.48, 1.0, r));
               vec3 diskColor = mix(vec3(0.7, 0.2, 1.0), vec3(1.0, 0.4, 0.0), smoothstep(0.35, 1.0, r));
               diffuseColor = vec4(diskColor * 1.8, diskFactor * 0.95 * vBodyAlpha);
             }
+          } else if (vDensity >= 45.0) {
+            // Нейтронная звезда: крошечная, ослепительно бело-голубая.
+            float core = 1.0 - smoothstep(0.0, 1.0, r);
+            vec3 nsColor = mix(vec3(0.62, 0.86, 1.0), vec3(1.0), core * core);
+            diffuseColor = vec4(nsColor * (1.4 + core * 0.8), bodyEdge * vBodyAlpha);
+          } else if (vDensity >= 4.0) {
+            // Белый карлик: маленький, плотный, бело-голубой.
+            float core = 1.0 - smoothstep(0.0, 1.0, r);
+            vec3 wdColor = mix(vec3(0.85, 0.9, 1.0), vec3(1.0), core);
+            diffuseColor = vec4(wdColor * (1.15 + core * 0.5), bodyEdge * vBodyAlpha);
+          } else if (vDensity >= 0.3) {
+            // Звезда: светящееся тело с горячим ядром и мягкой короной.
+            float core = 1.0 - smoothstep(0.0, 0.95, r);
+            vec3 starColor = mix(vBodyColor, vec3(1.0, 0.95, 0.82), core * 0.6);
+            starColor *= 1.25 + core * 0.6;
+            float glow = smoothstep(1.0, 0.35, r);
+            diffuseColor = vec4(starColor, max(bodyEdge, glow * 0.55) * vBodyAlpha);
+          } else if (vDensity < 0.09) {
+            // Газовый гигант: полосатый, рыхлый, с мягким краем.
+            float bands = 0.5 + 0.5 * sin(vBodyLocal.y * 9.0);
+            vec3 ggBase = mix(shadedBodyColor, vec3(0.85, 0.72, 0.55), 0.45);
+            diffuseColor = vec4(ggBase * mix(0.8, 1.12, bands), bodyEdge * vBodyAlpha * 0.92);
+          }
+
+          if (vSelected > 0.5) {
+            // Яркое кольцо по краю выбранного тела — поверх любого типа.
+            float ring = smoothstep(0.52, 0.7, bodyRadiusSq);
+            diffuseColor.rgb = mix(diffuseColor.rgb + 0.12, vec3(1.0), ring * 0.85);
+            diffuseColor.a = max(diffuseColor.a, ring * vBodyAlpha);
           }
         `,
       );
     };
-    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v3";
+    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v4";
     const particles = new THREE.Mesh(geometry, this.particleMaterial);
     particles.frustumCulled = false;
     this.scene.add(particles);

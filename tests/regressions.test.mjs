@@ -5,6 +5,7 @@ import test from "node:test";
 const shaders = readFileSync(new URL("../src/gpu-shaders.ts", import.meta.url), "utf8");
 const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const engine = readFileSync(new URL("../src/gpu-engine.ts", import.meta.url), "utf8");
+const objectTypes = readFileSync(new URL("../src/object-types.ts", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/style.css", import.meta.url), "utf8");
 
 test("GPU step keeps both halves of velocity Verlet", () => {
@@ -46,11 +47,30 @@ test("merge preserves the survivor's density (no black-hole ballooning)", () => 
   assert.doesNotMatch(shaders, /sqrt\(totalMass \/ MASS_DENSITY\)/);
 });
 
-test("black-hole appearance is driven by density, not raw mass", () => {
-  assert.match(engine, /vIsBlackHole = step\(45\.0, bodyDensity\)/);
+test("each body exposes a real density derived from mass and radius", () => {
+  assert.match(engine, /density: radius > 0 \? mass \/ \(radius \* radius\) : 0/);
+});
+
+test("rendering classifies bodies by a density ladder, not raw mass", () => {
+  assert.match(engine, /vDensity = gpuPosition\.z \/ max\(gpuPosition\.w \* gpuPosition\.w/);
+  assert.match(engine, /vDensity >= 120\.0/); // чёрная дыра
+  assert.match(engine, /vDensity >= 45\.0/); // нейтронная звезда
+  assert.match(engine, /vDensity >= 4\.0/); // белый карлик
+  assert.match(engine, /vDensity >= 0\.3/); // звезда
+  assert.match(engine, /vDensity < 0\.09/); // газовый гигант
   assert.doesNotMatch(engine, /step\(20000\.0, gpuPosition\.z\)/);
 });
 
-test("each body exposes a real density derived from mass and radius", () => {
-  assert.match(engine, /density: radius > 0 \? mass \/ \(radius \* radius\) : 0/);
+test("object types form a registry and derive mass from density", () => {
+  assert.match(objectTypes, /export const OBJECT_TYPES/);
+  assert.match(objectTypes, /return type\.density \* radius \* radius/); // massFor
+  for (const id of ["asteroid", "rocky", "gasGiant", "star", "whiteDwarf", "neutronStar", "blackHole"]) {
+    assert.match(objectTypes, new RegExp(`id: "${id}"`));
+  }
+});
+
+test("creation is wired to the object-type registry, not hardcoded presets", () => {
+  assert.match(main, /massFor\(type, radius\)/);
+  assert.doesNotMatch(main, /selectedCreationPreset/);
+  assert.doesNotMatch(main, /preset-planet|preset-blackhole/);
 });

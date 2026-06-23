@@ -2,6 +2,7 @@ import "./style.css";
 import { GPUEngine, type BodySnapshot, type CameraState, type CreationPreview, type Vec2 } from "./gpu-engine";
 import { BodiesSidebar } from "./ui";
 import { SpaceAudio } from "./audio";
+import { OBJECT_TYPES, OBJECT_TYPE_MAP, massFor, type ObjectTypeId } from "./object-types";
 
 type InteractionMode = "idle" | "create" | "pan";
 type CreationStyle = "growing" | "vector";
@@ -27,8 +28,13 @@ const fpsCounter = document.querySelector<HTMLElement>("#fps-counter")!;
 
 const timeButtons = document.querySelectorAll<HTMLButtonElement>(".time-btn");
 
-const presetPlanetBtn = document.querySelector<HTMLButtonElement>("#preset-planet")!;
-const presetBlackholeBtn = document.querySelector<HTMLButtonElement>("#preset-blackhole")!;
+const typePalette = document.querySelector<HTMLElement>("#type-palette")!;
+const inspectorDot = document.querySelector<HTMLElement>("#inspector-dot")!;
+const inspectorName = document.querySelector<HTMLElement>("#inspector-name")!;
+const inspectorRadius = document.querySelector<HTMLElement>("#inspector-radius")!;
+const inspectorMass = document.querySelector<HTMLElement>("#inspector-mass")!;
+const inspectorDensity = document.querySelector<HTMLElement>("#inspector-density")!;
+const inspectorHint = document.querySelector<HTMLElement>("#inspector-hint")!;
 
 const scenarioSolarBtn = document.querySelector<HTMLButtonElement>("#scenario-solar")!;
 const scenarioBinaryBtn = document.querySelector<HTMLButtonElement>("#scenario-binary")!;
@@ -43,14 +49,9 @@ const audio = new SpaceAudio();
 const FIXED_STEP = 1 / 90;
 const MAX_FRAME_TIME = 0.05;
 const MAX_SUBSTEPS = 5;
-const BASE_RADIUS = 8;
+// Скорость роста радиуса при удержании (ед/с). Радиус растёт от minRadius выбранного
+// типа до его maxRadius; масса выводится как density * r^2 (см. object-types.ts).
 const HOLD_GROWTH_RATE = 11;
-const MAX_CREATION_RADIUS = 140;
-// Плотность по типу тела (масса выводится как density * r^2 — см. bodyDensity() в шейдере).
-// Каменистая планета — эталон; чёрная дыра — экстремально плотная (= 45000 / 15^2).
-const DENSITY_PLANET = 0.15;
-const DENSITY_BLACKHOLE = 200;
-const BLACKHOLE_RADIUS = 15;
 const VECTOR_THRESHOLD_PX = 10;
 const VELOCITY_SCALE = 0.7;
 const MIN_ZOOM = 0.02;
@@ -70,7 +71,7 @@ let selectedId: number | null = null;
 let pointerId: number | null = null;
 let spacePressed = false;
 let holdStartedAt = 0;
-let frozenRadius = BASE_RADIUS;
+let frozenRadius = 8;
 let dragStartScreen: Vec2 = { x: 0, y: 0 };
 let dragStartWorld: Vec2 = { x: 0, y: 0 };
 let dragCurrentWorld: Vec2 = { x: 0, y: 0 };
@@ -80,7 +81,7 @@ let noticeTimer = 0;
 // O'yin rejimi sozlamalari
 let soundEnabled = false;
 let timeSpeed = 1;
-let selectedCreationPreset: "planet" | "blackhole" = "planet";
+let selectedTypeId: ObjectTypeId = "rocky";
 let isDeletingOrClearing = false;
 
 // FPS hisoblash o'zgaruvchilari
@@ -114,15 +115,11 @@ function screenToWorld(point: Vec2): Vec2 {
 }
 
 function currentGrowthRadius(now = performance.now()): number {
-  if (selectedCreationPreset === "blackhole") {
-    // Qora tuynuk o'ta zich, hajmi ixcham bo'ladi
-    return 15;
-  }
+  const type = OBJECT_TYPE_MAP[selectedTypeId];
   if (creationStyle === "vector") return frozenRadius;
-  return Math.min(
-    MAX_CREATION_RADIUS,
-    BASE_RADIUS + Math.max(0, now - holdStartedAt) / 1000 * HOLD_GROWTH_RATE,
-  );
+  // Удержание наращивает радиус от minRadius к maxRadius выбранного типа.
+  const grown = type.minRadius + Math.max(0, now - holdStartedAt) / 1000 * HOLD_GROWTH_RATE;
+  return Math.min(type.maxRadius, grown);
 }
 
 function focusBody(id: number): void {
@@ -166,22 +163,54 @@ timeButtons.forEach(btn => {
   });
 });
 
-// Presetlarni almashtirish
-presetPlanetBtn.addEventListener("click", () => {
-  presetPlanetBtn.classList.add("is-active");
-  presetPlanetBtn.setAttribute("aria-pressed", "true");
-  presetBlackholeBtn.classList.remove("is-active");
-  presetBlackholeBtn.setAttribute("aria-pressed", "false");
-  selectedCreationPreset = "planet";
-});
+// Палитра типов тел + живой инспектор. Палитра строится из единого реестра
+// OBJECT_TYPES, поэтому добавление нового типа не требует правок в HTML.
+const typeButtons = new Map<ObjectTypeId, HTMLButtonElement>();
 
-presetBlackholeBtn.addEventListener("click", () => {
-  presetBlackholeBtn.classList.add("is-active");
-  presetBlackholeBtn.setAttribute("aria-pressed", "true");
-  presetPlanetBtn.classList.remove("is-active");
-  presetPlanetBtn.setAttribute("aria-pressed", "false");
-  selectedCreationPreset = "blackhole";
-});
+function formatMass(mass: number): string {
+  if (mass >= 1000) return Math.round(mass).toLocaleString("ru-RU");
+  if (mass >= 100) return Math.round(mass).toString();
+  return mass.toFixed(1);
+}
+
+function updateInspector(): void {
+  const type = OBJECT_TYPE_MAP[selectedTypeId];
+  // Во время создания показываем живой радиус, иначе — радиус по умолчанию.
+  const radius = interactionMode === "create" ? currentGrowthRadius() : type.defaultRadius;
+  inspectorDot.style.setProperty("--type-accent", type.accent);
+  inspectorName.textContent = type.name;
+  inspectorRadius.textContent = radius.toFixed(1);
+  inspectorMass.textContent = formatMass(massFor(type, radius));
+  inspectorDensity.textContent = type.density.toFixed(2);
+  inspectorHint.textContent = type.hint;
+}
+
+function selectType(id: ObjectTypeId): void {
+  selectedTypeId = id;
+  for (const [typeId, button] of typeButtons) {
+    const active = typeId === id;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  updateInspector();
+}
+
+for (const type of OBJECT_TYPES) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "type-chip";
+  button.dataset.type = type.id;
+  button.title = type.hint;
+  button.setAttribute("aria-pressed", String(type.id === selectedTypeId));
+  if (type.id === selectedTypeId) button.classList.add("is-active");
+  button.innerHTML =
+    `<span class="type-chip-dot" style="--type-accent: ${type.accent}"></span>` +
+    `<span class="type-chip-name">${type.name}</span>`;
+  button.addEventListener("click", () => selectType(type.id));
+  typePalette.appendChild(button);
+  typeButtons.set(type.id, button);
+}
+updateInspector();
 
 // Ssenariylar boshqaruvi
 scenarioClearBtn.addEventListener("click", () => {
@@ -310,6 +339,8 @@ function endInteraction(): void {
   pointerId = null;
   canvas.classList.remove("is-aiming", "is-panning");
   canvas.classList.toggle("space-ready", spacePressed);
+  // Инспектор возвращается к параметрам по умолчанию выбранного типа.
+  updateInspector();
 }
 
 canvas.addEventListener("pointerdown", (event) => {
@@ -337,7 +368,7 @@ canvas.addEventListener("pointerdown", (event) => {
   interactionMode = "create";
   creationStyle = "growing";
   holdStartedAt = performance.now();
-  frozenRadius = BASE_RADIUS;
+  frozenRadius = OBJECT_TYPE_MAP[selectedTypeId].minRadius;
   dragStartScreen = pointerScreenPosition(event);
   dragStartWorld = screenToWorld(dragStartScreen);
   dragCurrentWorld = { ...dragStartWorld };
@@ -357,15 +388,13 @@ canvas.addEventListener("pointermove", (event) => {
 
   if (interactionMode === "create") {
     dragCurrentWorld = screenToWorld(screenPosition);
+    // Перетягивание дальше порога фиксирует радиус и переходит к заданию вектора
+    // скорости — единое поведение для всех типов тел.
     if (
-      selectedCreationPreset !== "blackhole" &&
       creationStyle === "growing" &&
       Math.hypot(screenPosition.x - dragStartScreen.x, screenPosition.y - dragStartScreen.y) > VECTOR_THRESHOLD_PX
     ) {
       frozenRadius = currentGrowthRadius();
-      creationStyle = "vector";
-    } else if (selectedCreationPreset === "blackhole") {
-      // Qora tuynukni ham otish imkoniyati bor
       creationStyle = "vector";
     }
   }
@@ -382,12 +411,10 @@ canvas.addEventListener("pointerup", (event) => {
         }
       : { x: 0, y: 0 };
     
-    const isBlackHole = selectedCreationPreset === "blackhole";
-    const radius = isBlackHole ? BLACKHOLE_RADIUS : currentGrowthRadius();
-    const density = isBlackHole ? DENSITY_BLACKHOLE : DENSITY_PLANET;
-    // Масса выводится из плотности и радиуса: mass = density * r^2. Один путь для
-    // всех типов тел — плотность становится первоклассным свойством объекта.
-    const mass = density * radius * radius;
+    // Радиус (с учётом удержания) и плотность типа задают массу: mass = density * r^2.
+    const type = OBJECT_TYPE_MAP[selectedTypeId];
+    const radius = currentGrowthRadius();
+    const mass = massFor(type, radius);
     const created = engine.injectBody(dragStartWorld, velocity, radius, mass) !== null;
 
     if (created) {
@@ -508,6 +535,8 @@ function frame(now: number): void {
     lastUiUpdate = now;
   }
   
+  // Во время создания радиус растёт от удержания — обновляем инспектор вживую.
+  if (interactionMode === "create") updateInspector();
   cameraCoords.textContent = `${Math.round(camera.x)}, ${Math.round(camera.y)}`;
   engine.render(camera, creationPreview(now), snapshots);
   requestAnimationFrame(frame);
