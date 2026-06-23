@@ -2,7 +2,7 @@ import "./style.css";
 import { GPUEngine, type BodySnapshot, type CameraState, type CreationPreview, type Vec2 } from "./gpu-engine";
 import { BodiesSidebar } from "./ui";
 import { SpaceAudio } from "./audio";
-import { OBJECT_TYPES, OBJECT_TYPE_MAP, massFor, type ObjectTypeId } from "./object-types";
+import { OBJECT_TYPES, OBJECT_TYPE_MAP, massFor, type ObjectType, type ObjectTypeId } from "./object-types";
 
 type InteractionMode = "idle" | "create" | "pan";
 type CreationStyle = "growing" | "vector";
@@ -221,18 +221,19 @@ scenarioClearBtn.addEventListener("click", () => {
 scenarioSolarBtn.addEventListener("click", () => {
   clearAllBodies();
   setTimeout(() => {
-    // Quyosh tizimini yuklash
+    // Quyosh tizimi: markazda haqiqiy yulduz (zichlik 0.6 -> yulduz ko'rinishi),
+    // massasi orbital tezliklarni belgilaydi.
     const starPos = { x: 0, y: 0 };
-    const starMass = 25000;
-    // Markaziy yulduz (Sun)
-    engine.injectBody(starPos, { x: 0, y: 0 }, 28, starMass);
+    const sunRadius = 80;
+    const starMass = massFor(OBJECT_TYPE_MAP.star, sunRadius); // 0.6 * 80^2 = 3840
+    engine.injectBody(starPos, { x: 0, y: 0 }, sunRadius, starMass);
 
-    // Planetalar (masofa, radius, massa)
-    spawnCircularOrbit(starPos, starMass, 160, 6, 40);    // Merkuriy simon
-    spawnCircularOrbit(starPos, starMass, 260, 9, 150);   // Venera simon
-    spawnCircularOrbit(starPos, starMass, 380, 11, 280);  // Yer simon
-    spawnCircularOrbit(starPos, starMass, 500, 16, 800);  // Yupiter simon
-    
+    // Tosh planetalar va tashqi gaz giganti — barchasi taksonomiyaga mos.
+    spawnCircularOrbit(starPos, starMass, 200, 7);
+    spawnCircularOrbit(starPos, starMass, 300, 10);
+    spawnCircularOrbit(starPos, starMass, 420, 13);
+    spawnCircularOrbit(starPos, starMass, 560, 48, OBJECT_TYPE_MAP.gasGiant);
+
     showNotice("Quyosh tizimi yuklandi!");
   }, 100);
 });
@@ -240,15 +241,18 @@ scenarioSolarBtn.addEventListener("click", () => {
 scenarioBinaryBtn.addEventListener("click", () => {
   clearAllBodies();
   setTimeout(() => {
-    // Qo'shaloq yulduz tizimi
-    // Star 1: pos=(-160, 0), vel=(0, 14.9), mass=15000, radius=25
-    engine.injectBody({ x: -160, y: 0 }, { x: 0, y: 15 }, 24, 15000);
-    // Star 2: pos=(160, 0), vel=(0, -14.9), mass=15000, radius=25
-    engine.injectBody({ x: 160, y: 0 }, { x: 0, y: -15 }, 24, 15000);
+    // Ikkita haqiqiy yulduz (zichlik 0.6) barqaror o'zaro orbitada. Aylana binar
+    // orbitasi uchun: v = sqrt(G * m / (2 * d)), d — yulduzlar orasidagi masofa.
+    const starR = 48;
+    const m = massFor(OBJECT_TYPE_MAP.star, starR); // 0.6 * 48^2 = 1382.4
+    const separation = 320;
+    const vBin = Math.sqrt((9500 * m) / (2 * separation));
+    engine.injectBody({ x: -160, y: 0 }, { x: 0, y: vBin }, starR, m);
+    engine.injectBody({ x: 160, y: 0 }, { x: 0, y: -vBin }, starR, m);
 
-    // Bir nechta kichik yo'ldoshlarni yulduzlar atrofida aylantiramiz
-    spawnCircularOrbit({ x: 0, y: 0 }, 30000, 420, 8, 80);
-    
+    // Yo'ldosh planeta — ikkala yulduzning umumiy massasi atrofida aylanadi.
+    spawnCircularOrbit({ x: 0, y: 0 }, 2 * m, 460, 9);
+
     showNotice("Qo'shaloq yulduz ssenariysi yuklandi!");
   }, 100);
 });
@@ -282,19 +286,20 @@ function clearAllBodies(): void {
   snapshots.forEach(b => engine.deleteBody(b.id));
 }
 
-function spawnCircularOrbit(starPos: Vec2, starMass: number, distance: number, planetRadius: number, planetMass?: number): void {
+function spawnCircularOrbit(starPos: Vec2, starMass: number, distance: number, radius: number, type: ObjectType = OBJECT_TYPE_MAP.rocky): void {
   const angle = Math.random() * Math.PI * 2;
   const px = starPos.x + Math.cos(angle) * distance;
   const py = starPos.y + Math.sin(angle) * distance;
-  
+
   // Aylana orbitasi tezligi magnitude
   const v = Math.sqrt((9500.0 * starMass) / distance);
-  
+
   // Tezlik vektori pozitsiyaga perpendikulyar
   const vx = -Math.sin(angle) * v;
   const vy = Math.cos(angle) * v;
-  
-  engine.injectBody({ x: px, y: py }, { x: vx, y: vy }, planetRadius, planetMass);
+
+  // Massa tur zichligidan: orbital tana ham taksonomiyaga mos (planeta, gaz giganti...).
+  engine.injectBody({ x: px, y: py }, { x: vx, y: vy }, radius, massFor(type, radius));
 }
 
 // Какое тело под точкой (мировые координаты): ближайшее, в чей радиус попал клик.
