@@ -10,8 +10,14 @@ const shaderConstants = `
   #define FRAGMENTS_PER_EVENT ${FRAGMENTS_PER_EVENT}.0
   #define G 9500.0
   #define SOFTENING 12.0
+  // Базовая (эталонная) поверхностная плотность каменистого тела: mass = MASS_DENSITY * r^2.
+  // Реальная плотность каждого тела хранится неявно как mass / r^2 и может отличаться
+  // (рыхлый газ -> плотная планета -> сверхплотная чёрная дыра). См. bodyDensity().
   #define MASS_DENSITY 0.15
+  // При таком и большем отношении масс крупное тело безусловно поглощает мелкое.
   #define MERGE_RATIO 2.75
+  // Масштаб скорости разлёта при дальнейшем крошении осколка (НЕ порог столкновения —
+  // пороги исхода теперь физические, через скорость убегания, см. collisionRegime()).
   #define FRAGMENT_SPEED 62.0
   // Упругость отскока. Крупные тела — умеренно упруги; столкновения с участием
   // осколков — сильно неупругие: энергия рассеивается, поэтому скопление осколков
@@ -21,6 +27,21 @@ const shaderConstants = `
   // Доля устранения перекрытия за кадр (Baumgarte): мягкая позиционная коррекция,
   // которая не вбрасывает скорость в систему.
   #define POSITION_CORRECTION 0.5
+
+  // --- Реалистичные режимы столкновения (зависят от массы, скорости И плотности) ---
+  // Все пороги заданы относительно ВЗАИМНОЙ СКОРОСТИ УБЕГАНИЯ контакта (vEsc) —
+  // это переводит «магические» скорости в физический критерий гравитационной связи.
+  // Ниже этой доли vEsc контакт считается мягким (рикошет жёстких тел, можно
+  // складывать тела в кучу — песочница не схлопывается мгновенно).
+  #define BOUNCE_ESC_FACTOR 0.5
+  // Выше этой доли vEsc удар гиперболический: лобовой -> катастрофа, скользящий -> «hit-and-run».
+  #define DISRUPT_ESC_FACTOR 1.6
+  // Во сколько раз одно тело плотнее, чтобы безусловно поглотить другое: так чёрная
+  // дыра / нейтронная звезда (структурно неразрушимы) ВСЕГДА аккрецируют — без хака.
+  #define DENSITY_DOMINANCE 12.0
+  // Насколько удар «в лоб» (|cos| между относительной скоростью и нормалью контакта)
+  // нужен для катастрофического разрушения, а не рикошета по касательной.
+  #define HEADON_COS 0.5
 
   uniform float u_dt;
   uniform float u_time;
@@ -48,6 +69,66 @@ const shaderConstants = `
   vec2 safeDir(vec2 v, vec2 fallback) {
     float len = length(v);
     return len > 0.0001 ? v / len : fallback;
+  }
+
+  // Поверхностная плотность тела (mass / radius^2). Пропорциональна реальной
+  // плотности и именно она отличает пыль/планету/звезду/нейтронную звезду/чёрную
+  // дыру друг от друга. Радиус -> производная величина: r = sqrt(mass / density).
+  float bodyDensity(vec4 body) {
+    return body.z / max(body.w * body.w, 1e-6);
+  }
+
+  // Единая модель исхода столкновения двух тел. СИММЕТРИЧНА по (a, b): позиционный,
+  // скоростной и фрагментный проходы вызывают ОДНУ функцию -> всегда одно решение,
+  // поэтому масса и импульс не могут «разойтись» между проходами. Коды исхода:
+  //   0.0 — рикошет (мягкий контакт жёстких тел / скользящий «hit-and-run» / нет слотов)
+  //   1.0 — слияние/аккреция (доминирует плотность или масса, либо связаны при средней энергии)
+  //   2.0 — катастрофическое разрушение (оба основных тела дробятся на осколки)
+  //   3.0 — крошение осколка на месте (в паре участвует осколок)
+  float collisionRegime(vec4 posA, vec4 velA, vec4 posB, vec4 velB, bool bothMain, bool slotsFree) {
+    float totalMass = posA.z + posB.z;
+    float kA = bodyDensity(posA);
+    float kB = bodyDensity(posB);
+    float densityRatio = max(kA, kB) / max(min(kA, kB), 1e-6);
+    float massRatio = max(posA.z, posB.z) / max(min(posA.z, posB.z), 1e-6);
+    vec2 relVel = velB.xy - velA.xy;
+    float relSpeed = length(relVel);
+    // Взаимная скорость убегания на контакте — реальный критерий связанности.
+    float vEsc = sqrt(2.0 * G * totalMass / max(posA.w + posB.w, SOFTENING));
+
+    // Сверхплотное тело (чёрная дыра, нейтронная звезда) поглощает любое другое.
+    if (densityRatio >= DENSITY_DOMINANCE) return 1.0;
+    // Сильно неравные массы — крупное тело поглощает мелкое (аккреция/кратеринг).
+    if (massRatio >= MERGE_RATIO) return 1.0;
+    // Быстрый, гиперболический удар сопоставимых масс.
+    if (relSpeed >= vEsc * DISRUPT_ESC_FACTOR) {
+      vec2 normal = safeDir(posB.xy - posA.xy, vec2(1.0, 0.0));
+      float headOn = abs(dot(safeDir(relVel, normal), normal));
+      if (headOn >= HEADON_COS) {
+        if (bothMain) return slotsFree ? 2.0 : 0.0;  // в лоб: разрушение, если есть слоты, иначе рикошет
+        return 3.0;                                   // в паре осколок -> он крошится на месте
+      }
+      return 0.0;  // скользящий быстрый проход — «hit-and-run», рикошет (оба уцелели)
+    }
+    // Мягкий контакт жёстких тел — рикошет (позволяет складывать тела, песочница живёт).
+    if (relSpeed < vEsc * BOUNCE_ESC_FACTOR) return 0.0;
+    // Гравитационно связаны при средней энергии — аккреция/слияние.
+    return 1.0;
+  }
+
+  // Кто «выживает» при слиянии. При доминировании плотности — более плотное тело
+  // (чёрная дыра поглощает даже более массивное рыхлое облако), иначе — более
+  // массивное. Ничьи решаются по индексу, чтобы оба прохода выбрали ОДНО тело.
+  bool survivorIsSelf(float selfIndex, float partnerIndex, vec4 posSelf, vec4 posOther) {
+    float kS = bodyDensity(posSelf);
+    float kO = bodyDensity(posOther);
+    float densityRatio = max(kS, kO) / max(min(kS, kO), 1e-6);
+    if (densityRatio >= DENSITY_DOMINANCE) {
+      if (abs(kS - kO) > 1e-6) return kS > kO;
+      return selfIndex < partnerIndex;
+    }
+    if (abs(posSelf.z - posOther.z) > 0.0001) return posSelf.z > posOther.z;
+    return selfIndex < partnerIndex;
   }
 
   // Гравитация рассчитывается от всех активных тел (PARTICLE_COUNT)
@@ -181,13 +262,15 @@ const shaderConstants = `
     if (!isMutualPair(parentIndex, partner)) return -1.0;
     vec4 otherPosition = texture2D(texturePosition, uvForIndex(partner));
     vec4 otherVelocity = texture2D(textureVelocity, uvForIndex(partner));
-    float ratio = max(parentPosition.z, otherPosition.z) / min(parentPosition.z, otherPosition.z);
     float relativeSpeed = length(otherVelocity.xy - parentVelocity.xy);
-    if (ratio >= MERGE_RATIO || relativeSpeed < FRAGMENT_SPEED) return -1.0;
     float totalMass = parentPosition.z + otherPosition.z;
     float energy = 0.5 * totalMass * relativeSpeed * relativeSpeed;
     float count = fragmentCount(energy, totalMass);
-    if (!fragmentSlotsFree(parentIndex, count)) return -1.0;
+    bool slotsFree = fragmentSlotsFree(parentIndex, count);
+    // Осколки рождаются ТОЛЬКО при катастрофическом разрушении (режим 2.0). Та же
+    // функция вызывается в main(), поэтому решение совпадает и масса сохраняется.
+    float regime = collisionRegime(parentPosition, parentVelocity, otherPosition, otherVelocity, true, slotsFree);
+    if (regime < 1.5 || regime > 2.5) return -1.0;
     return partner;
   }
 `;
@@ -246,9 +329,12 @@ export const positionShader = `
               vec2 direction = vec2(cos(angle), sin(angle));
               // Масса нормирована весом: сумма масс осколков точно равна исходной массе.
               float mass = totalMass * fragmentWeight(selfIndex) / fragmentWeightSum(parentIndex, count);
-              float radius = sqrt(mass / MASS_DENSITY);
+              // Плотность осколков — материал исходных тел (сохраняем суммарную площадь):
+              // куски той же «породы», а не размазанные под глобальную плотность.
+              float kFrag = totalMass / max(parentPosition.w * parentPosition.w + otherPosition.w * otherPosition.w, 1e-6);
+              float radius = sqrt(mass / kFrag);
               // Кольцо разлёта растёт с числом осколков -> без взаимного перекрытия.
-              float averageRadius = sqrt((totalMass / count) / MASS_DENSITY);
+              float averageRadius = sqrt((totalMass / count) / kFrag);
               float ringRadius = (parentPosition.w + otherPosition.w) * 0.4 + count * averageRadius * 0.42;
               vec2 center = (parentPosition.xy * parentPosition.z + otherPosition.xy * otherPosition.z) / totalMass;
               gl_FragColor = vec4(center + direction * ringRadius, mass, radius);
@@ -270,47 +356,42 @@ export const positionShader = `
     if (partnerIndex >= 0.0 && isMutualPair(selfIndex, partnerIndex)) {
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(partnerIndex));
       vec4 otherVelocity = texture2D(textureVelocity, uvForIndex(partnerIndex));
-      float ratio = max(positionData.z, otherPosition.z) / min(positionData.z, otherPosition.z);
-      float relativeSpeed = length(otherVelocity.xy - velocityData.xy);
       bool bothMain = selfIndex < MAIN_BODY_COUNT && partnerIndex < MAIN_BODY_COUNT;
-      bool survivor = positionData.z > otherPosition.z ||
-        (abs(positionData.z - otherPosition.z) < 0.0001 && selfIndex < partnerIndex);
-      // Дробление возможно только когда есть свободные слоты под осколки (в блоке
-      // меньшего индекса). Те же условия — в фрагментном блоке выше, поэтому либо оба
-      // тела превращаются в осколки, либо масса уходит в слияние — но не пропадает.
-      float collisionMass = positionData.z + otherPosition.z;
-      float collisionEnergy = 0.5 * collisionMass * relativeSpeed * relativeSpeed;
-      float collisionFragments = fragmentCount(collisionEnergy, collisionMass);
-      
-      bool isFragmentCollision = selfIndex >= MAIN_BODY_COUNT || partnerIndex >= MAIN_BODY_COUNT;
-      bool doShatter = ratio < MERGE_RATIO && relativeSpeed >= FRAGMENT_SPEED && 
-        (bothMain ? fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments) : isFragmentCollision);
+      float totalMass = positionData.z + otherPosition.z;
+      float relativeSpeed = length(otherVelocity.xy - velocityData.xy);
+      float collisionEnergy = 0.5 * totalMass * relativeSpeed * relativeSpeed;
+      float collisionFragments = fragmentCount(collisionEnergy, totalMass);
+      // Слоты под осколки нужны только когда дробятся ДВА основных тела (блок меньшего индекса).
+      bool slotsFree = bothMain ? fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments) : true;
+      float regime = collisionRegime(positionData, velocityData, otherPosition, otherVelocity, bothMain, slotsFree);
 
-      if (doShatter) {
-        if (bothMain) {
-          gl_FragColor = vec4(0.0);
-          return;
-        } else {
-          // Осколок крошится дальше (бесконечная рекурсия): уменьшаем его массу и радиус без нижнего порога
-          float newMass = positionData.z * 0.45;
-          float newRadius = sqrt(newMass / MASS_DENSITY);
-          gl_FragColor = vec4(positionData.xy, newMass, newRadius);
-          return;
-        }
-      }
-      if (ratio >= MERGE_RATIO || relativeSpeed >= FRAGMENT_SPEED) {
-        // Слияние: масса всегда переходит к выжившему, ничто не исчезает бесследно.
-        if (!survivor) {
-          gl_FragColor = vec4(0.0);
-          return;
-        }
-        float totalMass = positionData.z + otherPosition.z;
-        vec2 center = (positionData.xy * positionData.z + otherPosition.xy * otherPosition.z) / totalMass;
-        gl_FragColor = vec4(center, totalMass, sqrt(totalMass / MASS_DENSITY));
+      if (regime > 1.5 && regime < 2.5) {
+        // Катастрофа: оба основных тела исчезают, вся масса уходит в осколки.
+        gl_FragColor = vec4(0.0);
         return;
       }
-      // Низкоэнергетический контакт: мягко разводим перекрытие (доля POSITION_CORRECTION,
-      // без вброса скорости). Смещение обратно массе — лёгкое тело отходит сильнее.
+      if (regime > 2.5) {
+        // Крошение осколка (бесконечная рекурсия): масса и радиус падают, но плотность
+        // осколка сохраняется (r ~ sqrt(mass) при той же плотности), а не размазывается.
+        float newMass = positionData.z * 0.45;
+        float newRadius = sqrt(newMass / bodyDensity(positionData));
+        gl_FragColor = vec4(positionData.xy, newMass, newRadius);
+        return;
+      }
+      if (regime > 0.5) {
+        // Слияние/аккреция: масса переходит к выжившему, радиус сохраняет ЕГО плотность.
+        // Поэтому чёрная дыра остаётся компактной, а не раздувается в гигантский пузырь.
+        if (!survivorIsSelf(selfIndex, partnerIndex, positionData, otherPosition)) {
+          gl_FragColor = vec4(0.0);
+          return;
+        }
+        vec2 center = (positionData.xy * positionData.z + otherPosition.xy * otherPosition.z) / totalMass;
+        float kSurvivor = bodyDensity(positionData);
+        gl_FragColor = vec4(center, totalMass, sqrt(totalMass / kSurvivor));
+        return;
+      }
+      // Рикошет: мягко разводим перекрытие (доля POSITION_CORRECTION, без вброса
+      // скорости). Смещение обратно массе — лёгкое тело отходит сильнее.
       vec2 delta = otherPosition.xy - positionData.xy;
       float distanceToOther = max(length(delta), 0.001);
       vec2 fallback = selfIndex < partnerIndex ? vec2(1.0, 0.0) : vec2(-1.0, 0.0);
@@ -546,45 +627,38 @@ export const velocityShader = `
     if (partnerIndex >= 0.0 && isMutualPair(selfIndex, partnerIndex)) {
       vec4 otherPosition = texture2D(texturePosition, uvForIndex(partnerIndex));
       vec4 otherVelocity = texture2D(textureVelocity, uvForIndex(partnerIndex));
-      float ratio = max(positionData.z, otherPosition.z) / min(positionData.z, otherPosition.z);
-      float relativeSpeed = length(otherVelocity.xy - velocityData.xy);
       bool bothMain = selfIndex < MAIN_BODY_COUNT && partnerIndex < MAIN_BODY_COUNT;
-      bool survivor = positionData.z > otherPosition.z ||
-        (abs(positionData.z - otherPosition.z) < 0.0001 && selfIndex < partnerIndex);
-      float collisionMass = positionData.z + otherPosition.z;
-      float collisionEnergy = 0.5 * collisionMass * relativeSpeed * relativeSpeed;
-      float collisionFragments = fragmentCount(collisionEnergy, collisionMass);
-      
-      bool isFragmentCollision = selfIndex >= MAIN_BODY_COUNT || partnerIndex >= MAIN_BODY_COUNT;
-      bool doShatter = ratio < MERGE_RATIO && relativeSpeed >= FRAGMENT_SPEED && 
-        (bothMain ? fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments) : isFragmentCollision);
+      float totalMass = positionData.z + otherPosition.z;
+      float relativeSpeed = length(otherVelocity.xy - velocityData.xy);
+      float collisionEnergy = 0.5 * totalMass * relativeSpeed * relativeSpeed;
+      float collisionFragments = fragmentCount(collisionEnergy, totalMass);
+      bool slotsFree = bothMain ? fragmentSlotsFree(min(selfIndex, partnerIndex), collisionFragments) : true;
+      float regime = collisionRegime(positionData, velocityData, otherPosition, otherVelocity, bothMain, slotsFree);
 
-      if (doShatter) {
-        if (bothMain) {
-          gl_FragColor = vec4(0.0);
-          return;
-        } else {
-          // Осколок крошится дальше: отскок на высокой скорости в сторону сброса энергии
-          vec2 centerVelocity = (velocityData.xy * positionData.z + otherVelocity.xy * otherPosition.z) / (positionData.z + otherPosition.z);
-          vec2 impactNormal = safeDir(otherPosition.xy - positionData.xy, vec2(1.0, 0.0));
-          float seed = hash11(selfIndex * 3.7 + u_time * 1.3);
-          float angle = atan(impactNormal.y, impactNormal.x) + 1.57 + (seed - 0.5) * 2.0;
-          vec2 burst = vec2(cos(angle), sin(angle)) * (FRAGMENT_SPEED * 0.35 * (0.6 + 0.8 * seed));
-          
-          gl_FragColor = vec4(centerVelocity + burst, 12.0, 1.35); // сброс жизни
-          return;
-        }
+      if (regime > 1.5 && regime < 2.5) {
+        // Катастрофа: основное тело исчезает (его масса учтена осколками).
+        gl_FragColor = vec4(0.0);
+        return;
       }
-      if (ratio >= MERGE_RATIO || relativeSpeed >= FRAGMENT_SPEED) {
-        // Слияние сохраняет импульс: масса-взвешему скорость.
-        if (!survivor) {
+      if (regime > 2.5) {
+        // Крошение осколка: высокоскоростной отскок в сторону сброса энергии.
+        vec2 centerVelocity = (velocityData.xy * positionData.z + otherVelocity.xy * otherPosition.z) / totalMass;
+        vec2 impactNormal = safeDir(otherPosition.xy - positionData.xy, vec2(1.0, 0.0));
+        float seed = hash11(selfIndex * 3.7 + u_time * 1.3);
+        float angle = atan(impactNormal.y, impactNormal.x) + 1.57 + (seed - 0.5) * 2.0;
+        vec2 burst = vec2(cos(angle), sin(angle)) * (FRAGMENT_SPEED * 0.35 * (0.6 + 0.8 * seed));
+        gl_FragColor = vec4(centerVelocity + burst, 12.0, 1.35); // сброс жизни
+        return;
+      }
+      if (regime > 0.5) {
+        // Слияние сохраняет импульс: масса-взвешенная скорость переходит к выжившему.
+        if (!survivorIsSelf(selfIndex, partnerIndex, positionData, otherPosition)) {
           gl_FragColor = vec4(0.0);
           return;
         }
-        velocityData.xy = (velocityData.xy * positionData.z + otherVelocity.xy * otherPosition.z) /
-          (positionData.z + otherPosition.z);
+        velocityData.xy = (velocityData.xy * positionData.z + otherVelocity.xy * otherPosition.z) / totalMass;
       } else {
-        // Неупругий отскок с физическим импульсом + тангенциальное трение для реализма
+        // Рикошет: неупругий импульс по нормали + тангенциальное трение для реализма.
         vec2 delta = otherPosition.xy - positionData.xy;
         vec2 fallback = selfIndex < partnerIndex ? vec2(1.0, 0.0) : vec2(-1.0, 0.0);
         vec2 normal = safeDir(delta, fallback);

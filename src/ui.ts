@@ -10,6 +10,8 @@ const STAR_ICON = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="
 type CardRefs = {
   card: HTMLElement;
   mass: HTMLElement;
+  density: HTMLElement;
+  radius: HTMLElement;
   speed: HTMLElement;
   coords: HTMLElement;
   favorite: HTMLButtonElement;
@@ -123,6 +125,8 @@ export class BodiesSidebar {
   private updateValues(refs: CardRefs, body: BodySnapshot): void {
     const speed = Math.hypot(body.velocity.x, body.velocity.y);
     refs.mass.textContent = formatNumber(body.mass, 2);
+    refs.density.textContent = formatNumber(body.density, 2);
+    refs.radius.textContent = formatNumber(body.radius, 1);
     refs.speed.innerHTML = `${formatNumber(speed)} <small>ед/с</small>`;
     refs.coords.textContent = `${formatNumber(body.position.x)}, ${formatNumber(body.position.y)}`;
   }
@@ -154,6 +158,8 @@ export class BodiesSidebar {
       </div>
       <dl class="body-metrics">
         <div><dt>Масса</dt><dd class="metric-mass"></dd></div>
+        <div><dt>Плотность</dt><dd class="metric-density"></dd></div>
+        <div><dt>Радиус</dt><dd class="metric-radius"></dd></div>
         <div><dt>Скорость</dt><dd class="metric-speed"></dd></div>
         <div class="coordinates"><dt>Координаты</dt><dd class="metric-coords"></dd></div>
       </dl>`;
@@ -161,6 +167,8 @@ export class BodiesSidebar {
     const refs: CardRefs = {
       card,
       mass: card.querySelector<HTMLElement>(".metric-mass")!,
+      density: card.querySelector<HTMLElement>(".metric-density")!,
+      radius: card.querySelector<HTMLElement>(".metric-radius")!,
       speed: card.querySelector<HTMLElement>(".metric-speed")!,
       coords: card.querySelector<HTMLElement>(".metric-coords")!,
       favorite: card.querySelector<HTMLButtonElement>(".favorite-toggle")!,

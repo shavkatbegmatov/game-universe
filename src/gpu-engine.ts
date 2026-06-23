@@ -24,6 +24,8 @@ export type BodySnapshot = {
   velocity: Vec2;
   mass: number;
   radius: number;
+  /** Поверхностная плотность (mass / radius^2): отличает планету от чёрной дыры. */
+  density: number;
   hue: number;
   isFragment: boolean;
 };
@@ -177,7 +179,10 @@ export class GPUEngine {
           vBodyLocal = position.xy;
           // Подсветка только в экранном проходе (в след — нет).
           vSelected = (uTrailMode < 0.5 && abs(slotIndex - uSelectedSlot) < 0.5) ? 1.0 : 0.0;
-          vIsBlackHole = step(20000.0, gpuPosition.z);
+          // Чёрная дыра определяется ПЛОТНОСТЬЮ (mass / r^2), а не массой: огромная
+          // слившаяся звезда больше не выглядит как чёрная дыра, а ЧД остаётся ЧД.
+          float bodyDensity = gpuPosition.z / max(gpuPosition.w * gpuPosition.w, 1e-6);
+          vIsBlackHole = step(45.0, bodyDensity);
         `,
       );
       shader.fragmentShader = `
@@ -597,6 +602,7 @@ export class GPUEngine {
       if (!isFragment) this.occupiedMain[slot] = 1;
       const vx = this.velocityReadback[offset];
       const vy = this.velocityReadback[offset + 1];
+      const radius = this.positionReadback[offset + 3];
       // Тот же критерий «температуры», что в шейдере -> цвет точки в сайдбаре
       // совпадает с цветом тела на холсте: красный (холодно) … голубой (горячо).
       const heat = 1 - Math.exp(-(mass * 0.012 + Math.hypot(vx, vy) * 0.005));
@@ -606,7 +612,9 @@ export class GPUEngine {
         position: { x: this.positionReadback[offset], y: this.positionReadback[offset + 1] },
         velocity: { x: vx, y: vy },
         mass,
-        radius: this.positionReadback[offset + 3],
+        radius,
+        // Та же величина, что bodyDensity() в шейдере: масса на единицу площади.
+        density: radius > 0 ? mass / (radius * radius) : 0,
         hue: Math.round(15 + heat * 200),
         isFragment,
       });

@@ -46,6 +46,11 @@ const MAX_SUBSTEPS = 5;
 const BASE_RADIUS = 8;
 const HOLD_GROWTH_RATE = 11;
 const MAX_CREATION_RADIUS = 140;
+// Плотность по типу тела (масса выводится как density * r^2 — см. bodyDensity() в шейдере).
+// Каменистая планета — эталон; чёрная дыра — экстремально плотная (= 45000 / 15^2).
+const DENSITY_PLANET = 0.15;
+const DENSITY_BLACKHOLE = 200;
+const BLACKHOLE_RADIUS = 15;
 const VECTOR_THRESHOLD_PX = 10;
 const VELOCITY_SCALE = 0.7;
 const MIN_ZOOM = 0.02;
@@ -377,21 +382,13 @@ canvas.addEventListener("pointerup", (event) => {
         }
       : { x: 0, y: 0 };
     
-    let created = false;
-    let mass = 0;
-    if (selectedCreationPreset === "blackhole") {
-      // Qora tuynuk: massa = 45000, radius = 15
-      mass = 45000;
-      if (engine.injectBody(dragStartWorld, velocity, 15, mass) !== null) {
-        created = true;
-      }
-    } else {
-      const radius = currentGrowthRadius();
-      mass = radius * radius * 0.15; // MASS_DENSITY = 0.15
-      if (engine.injectBody(dragStartWorld, velocity, radius) !== null) {
-        created = true;
-      }
-    }
+    const isBlackHole = selectedCreationPreset === "blackhole";
+    const radius = isBlackHole ? BLACKHOLE_RADIUS : currentGrowthRadius();
+    const density = isBlackHole ? DENSITY_BLACKHOLE : DENSITY_PLANET;
+    // Масса выводится из плотности и радиуса: mass = density * r^2. Один путь для
+    // всех типов тел — плотность становится первоклассным свойством объекта.
+    const mass = density * radius * radius;
+    const created = engine.injectBody(dragStartWorld, velocity, radius, mass) !== null;
 
     if (created) {
       instruction.classList.add("is-hidden");
