@@ -169,12 +169,16 @@ export class GPUEngine {
           // дыра. Пороги band'ов совпадают с DENSITY_BANDS в object-types.ts.
           float density = gpuPosition.z / max(gpuPosition.w * gpuPosition.w, 1e-6);
           vDensity = density;
-          // Светящиеся тела (звезда, белый карлик, нейтронная звезда) рисуются в
-          // увеличенном квадрате, чтобы вокруг тела был ореол-корона.
+          // Постоянный «случайный» сид на тело: газовые гиганты/планеты не похожи,
+          // и им же решается, есть ли у газового гиганта кольца.
+          float seed = fract(sin(slotIndex * 12.9898) * 43758.5453);
+          vSeed = seed;
+          // Увеличенный квадрат: светящиеся тела -> корона; часть газовых гигантов -> кольца.
           float glowScale = 1.0;
           if (density >= 45.0 && density < 120.0) glowScale = 2.0;        // нейтронная звезда
           else if (density >= 4.0 && density < 45.0) glowScale = 1.55;    // белый карлик
           else if (density >= 0.3 && density < 4.0) glowScale = 1.7;      // звезда
+          else if (density < 0.09 && seed > 0.5) glowScale = 2.2;         // газовый гигант с кольцами
           // В режиме следа — тонкая точка в центре (без короны и без увеличения).
           vGlowScale = uTrailMode > 0.5 ? 1.0 : glowScale;
           float renderRadius = uTrailMode > 0.5 ? min(gpuPosition.w, uTrailWidth) : gpuPosition.w * glowScale;
@@ -191,8 +195,6 @@ export class GPUEngine {
           float fragmentAlpha = gpuVelocity.z > 0.0 ? smoothstep(0.0, 3.0, gpuVelocity.z) : 1.0;
           vBodyAlpha = bodyActive * fragmentAlpha;
           vBodyLocal = position.xy;
-          // Постоянный «случайный» сид на тело: газовые гиганты и планеты не похожи.
-          vSeed = fract(sin(slotIndex * 12.9898) * 43758.5453);
           // Подсветка только в экранном проходе (в след — нет).
           vSelected = (uTrailMode < 0.5 && abs(slotIndex - uSelectedSlot) < 0.5) ? 1.0 : 0.0;
         `,
@@ -292,8 +294,9 @@ export class GPUEngine {
           }
 
           // Корона/ореол светящихся тел: мягкое свечение ЗА поверхностью тела
-          // (между surface и краем квадрата), цвет — по типу.
-          if (vGlowScale > 1.001 && r > surface) {
+          // (между surface и краем квадрата), цвет — по типу. Только для звёзд и
+          // компактных остатков; у газовых гигантов увеличенный квадрат идёт под кольца.
+          if (vGlowScale > 1.001 && r > surface && vDensity >= 0.3) {
             vec3 glowColor =
               vDensity >= 45.0 ? vec3(0.55, 0.82, 1.0) :   // нейтронная звезда — голубая
               vDensity >= 4.0  ? vec3(0.78, 0.86, 1.0) :   // белый карлик — холодно-белый
@@ -302,6 +305,21 @@ export class GPUEngine {
             halo *= halo;
             diffuseColor.rgb += glowColor * halo * 0.9;
             diffuseColor.a = max(diffuseColor.a, halo * 0.8 * vBodyAlpha);
+          }
+
+          // Кольца газового гиганта (есть не у всех — по сиду): наклонный эллипс с полосами.
+          if (vGlowScale > 1.001 && vDensity < 0.09) {
+            float rr = length(vec2(local.x, local.y / 0.35));
+            float ringMask = smoothstep(1.25, 1.33, rr) * (1.0 - smoothstep(1.9, 2.0, rr));
+            ringMask *= 0.5 + 0.5 * sin(rr * 24.0);        // тонкие полосы колец
+            ringMask *= 0.6 + 0.4 * sin(rr * 7.0 + 1.5);   // широкие зоны и щель (тип Кассини)
+            ringMask = clamp(ringMask, 0.0, 1.0);
+            // Передняя дуга (local.y < 0) рисуется поверх планеты; задняя — за телом, скрыта.
+            float ringVisible = (length(local) > 1.0 || local.y < 0.0) ? 1.0 : 0.0;
+            ringMask *= ringVisible;
+            vec3 ringColor = vec3(0.82, 0.74, 0.6);
+            diffuseColor.rgb = mix(diffuseColor.rgb, ringColor, ringMask * 0.85);
+            diffuseColor.a = max(diffuseColor.a, ringMask * 0.85 * vBodyAlpha);
           }
 
           if (vSelected > 0.5) {
@@ -313,7 +331,7 @@ export class GPUEngine {
         `,
       );
     };
-    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v7";
+    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v8";
     const particles = new THREE.Mesh(geometry, this.particleMaterial);
     particles.frustumCulled = false;
     this.scene.add(particles);

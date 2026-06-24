@@ -70,13 +70,19 @@ test("luminous bodies render a corona via an enlarged quad", () => {
 test("rocky and gas-giant surfaces get per-body procedural detail", () => {
   assert.match(engine, /varying float vSeed/);
   assert.match(engine, /float vnoise\(vec2 p\)/);
-  assert.match(engine, /vSeed = fract\(sin\(slotIndex/);
+  assert.match(engine, /seed = fract\(sin\(slotIndex/);
 });
 
 test("body appearance animates over time via a uTime uniform", () => {
   assert.match(engine, /uniform float uTime/);
   assert.match(engine, /uTime\.value = this\.elapsed/);
   assert.match(engine, /float photon = smoothstep/); // фотонное кольцо чёрной дыры
+});
+
+test("some gas giants get a ring system in an enlarged quad", () => {
+  assert.match(engine, /density < 0\.09 && seed > 0\.5\) glowScale/); // кольца не у всех
+  assert.match(engine, /float ringMask = smoothstep/);
+  assert.match(engine, /float ringVisible = \(length\(local\) > 1\.0 \|\| local\.y < 0\.0\)/);
 });
 
 test("object types form a registry and derive mass from density", () => {
