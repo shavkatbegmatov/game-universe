@@ -41,6 +41,10 @@ const scenarioBinaryBtn = document.querySelector<HTMLButtonElement>("#scenario-b
 const scenarioChaosBtn = document.querySelector<HTMLButtonElement>("#scenario-chaos")!;
 const scenarioClearBtn = document.querySelector<HTMLButtonElement>("#scenario-clear")!;
 
+const sceneSaveBtn = document.querySelector<HTMLButtonElement>("#scene-save")!;
+const sceneLoadBtn = document.querySelector<HTMLButtonElement>("#scene-load")!;
+const sceneFileInput = document.querySelector<HTMLInputElement>("#scene-file")!;
+
 const engine = new GPUEngine(canvas);
 const camera: CameraState = { x: 0, y: 0, zoom: 1 };
 const sidebar = new BodiesSidebar(focusBody, deleteBody);
@@ -278,6 +282,68 @@ scenarioChaosBtn.addEventListener("click", () => {
     }
     showNotice("Xaotik to'qnashuv yuklandi!");
   }, 100);
+});
+
+// Сохранение/загрузка сцены в JSON. Сохраняются только основные тела (не осколки):
+// позиция, скорость, радиус и масса — этого достаточно, плотность/тип выводятся из них.
+type SceneBody = { x: number; y: number; vx: number; vy: number; r: number; m: number };
+
+function isSceneBody(value: unknown): value is SceneBody {
+  const b = value as Record<string, unknown>;
+  return !!b
+    && Number.isFinite(b.x) && Number.isFinite(b.y)
+    && Number.isFinite(b.vx) && Number.isFinite(b.vy)
+    && Number.isFinite(b.r) && (b.r as number) > 0
+    && Number.isFinite(b.m) && (b.m as number) > 0;
+}
+
+sceneSaveBtn.addEventListener("click", () => {
+  const bodies: SceneBody[] = snapshots
+    .filter((body) => !body.isFragment)
+    .map((body) => ({
+      x: body.position.x, y: body.position.y,
+      vx: body.velocity.x, vy: body.velocity.y,
+      r: body.radius, m: body.mass,
+    }));
+  const json = JSON.stringify({ version: 1, bodies }, null, 2);
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `gravity-scene-${bodies.length}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showNotice(`Сцена сохранена (${bodies.length})`);
+});
+
+sceneLoadBtn.addEventListener("click", () => sceneFileInput.click());
+
+sceneFileInput.addEventListener("change", () => {
+  const file = sceneFileInput.files?.[0];
+  sceneFileInput.value = ""; // позволяет загрузить тот же файл повторно
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let bodies: SceneBody[];
+    try {
+      const data = JSON.parse(String(reader.result)) as { bodies?: unknown };
+      const list = Array.isArray(data.bodies) ? data.bodies : [];
+      bodies = list.filter(isSceneBody);
+    } catch {
+      showNotice("Ошибка чтения файла сцены");
+      return;
+    }
+    clearAllBodies();
+    // Очистка идёт через очередь удалений — даём слотам освободиться перед вставкой.
+    setTimeout(() => {
+      let loaded = 0;
+      for (const b of bodies) {
+        if (engine.injectBody({ x: b.x, y: b.y }, { x: b.vx, y: b.vy }, b.r, b.m) !== null) loaded += 1;
+      }
+      instruction.classList.toggle("is-hidden", loaded > 0);
+      showNotice(`Сцена загружена (${loaded})`);
+    }, 120);
+  };
+  reader.readAsText(file);
 });
 
 function clearAllBodies(): void {

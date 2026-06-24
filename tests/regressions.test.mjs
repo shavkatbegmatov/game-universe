@@ -98,3 +98,10 @@ test("creation is wired to the object-type registry, not hardcoded presets", () 
   assert.doesNotMatch(main, /selectedCreationPreset/);
   assert.doesNotMatch(main, /preset-planet|preset-blackhole/);
 });
+
+test("scenes can be saved to and loaded from JSON", () => {
+  assert.match(main, /JSON\.stringify\(\{ version: 1, bodies \}/);
+  assert.match(main, /URL\.createObjectURL/);
+  assert.match(main, /function isSceneBody/); // загруженные тела валидируются
+  assert.match(main, /sceneFileInput\.click\(\)/);
+});
