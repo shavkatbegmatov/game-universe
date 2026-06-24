@@ -553,6 +553,34 @@ resetCameraButton.addEventListener("click", () => {
 modeCreateButton.addEventListener("click", () => setCursorMode("create"));
 modeSelectButton.addEventListener("click", () => setCursorMode("select"));
 
+// Горячие клавиши для быстрого рабочего процесса. Не перехватываем ввод в полях
+// и комбинации с модификаторами; Space зарезервирован под панорамирование.
+window.addEventListener("keydown", (event) => {
+  if (event.code === "Space" || event.ctrlKey || event.metaKey || event.altKey) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.matches("input, textarea, select")) return;
+
+  // 1–7: выбрать тип создаваемого тела (порядок палитры).
+  const digit = Number(event.key);
+  if (Number.isInteger(digit) && digit >= 1 && digit <= OBJECT_TYPES.length) {
+    selectType(OBJECT_TYPES[digit - 1].id);
+    setCursorMode("create");
+    return;
+  }
+
+  switch (event.key.toLowerCase()) {
+    case "c": setCursorMode("create"); break;
+    case "v": setCursorMode("select"); break;
+    case "p": pauseButton.click(); break;
+    case "escape": selectBody(null); break;
+    case "delete":
+    case "backspace":
+      if (selectedId !== null) { event.preventDefault(); deleteBody(selectedId); }
+      break;
+    default: return;
+  }
+});
+
 function frame(now: number): void {
   // FPS hisoblash
   fpsFrames += 1;

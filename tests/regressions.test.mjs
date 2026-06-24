@@ -105,3 +105,10 @@ test("scenes can be saved to and loaded from JSON", () => {
   assert.match(main, /function isSceneBody/); // загруженные тела валидируются
   assert.match(main, /sceneFileInput\.click\(\)/);
 });
+
+test("keyboard shortcuts drive type selection, modes and actions", () => {
+  assert.match(main, /selectType\(OBJECT_TYPES\[digit - 1\]\.id\)/); // 1–7 выбирают тип
+  assert.match(main, /case "v": setCursorMode\("select"\)/);
+  assert.match(main, /case "p": pauseButton\.click\(\)/);
+  assert.doesNotMatch(main, /case "space"/); // Space остаётся для панорамирования
+});
