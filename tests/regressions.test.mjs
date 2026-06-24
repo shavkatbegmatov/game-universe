@@ -73,6 +73,12 @@ test("rocky and gas-giant surfaces get per-body procedural detail", () => {
   assert.match(engine, /vSeed = fract\(sin\(slotIndex/);
 });
 
+test("body appearance animates over time via a uTime uniform", () => {
+  assert.match(engine, /uniform float uTime/);
+  assert.match(engine, /uTime\.value = this\.elapsed/);
+  assert.match(engine, /float photon = smoothstep/); // фотонное кольцо чёрной дыры
+});
+
 test("object types form a registry and derive mass from density", () => {
   assert.match(objectTypes, /export const OBJECT_TYPES/);
   assert.match(objectTypes, /return type\.density \* radius \* radius/); // massFor

@@ -129,6 +129,7 @@ export class GPUEngine {
       shader.uniforms.uTrailMode = { value: 0 };
       shader.uniforms.uTrailWidth = { value: TRAIL_LINE_WIDTH };
       shader.uniforms.uSelectedSlot = { value: -1 };
+      shader.uniforms.uTime = { value: 0 };
       this.particleUniforms = shader.uniforms;
       shader.vertexShader = `
         uniform sampler2D texturePosition;
@@ -197,6 +198,7 @@ export class GPUEngine {
         `,
       );
       shader.fragmentShader = `
+        uniform float uTime;
         varying float vBodyAlpha;
         varying vec3 vBodyColor;
         varying vec2 vBodyLocal;
@@ -236,36 +238,48 @@ export class GPUEngine {
           vec4 diffuseColor = vec4(shadedBodyColor, vBodyAlpha * bodyEdge);
 
           if (vDensity >= 120.0) {
-            // Чёрная дыра: тёмная сингулярность + аккреционный диск.
-            if (bodyR < 0.35) {
+            // Чёрная дыра: тень сингулярности + вращающийся диск + фотонное кольцо.
+            if (bodyR < 0.33) {
               diffuseColor = vec4(0.01, 0.01, 0.02, vBodyAlpha);
             } else {
-              float diskFactor = smoothstep(0.35, 0.48, bodyR) * (1.0 - smoothstep(0.48, 1.0, bodyR));
-              vec3 diskColor = mix(vec3(0.7, 0.2, 1.0), vec3(1.0, 0.4, 0.0), smoothstep(0.35, 1.0, bodyR));
-              diffuseColor = vec4(diskColor * 1.8, diskFactor * 0.95 * vBodyAlpha);
+              float ang = atan(local.y, local.x);
+              float swirl = 0.7 + 0.3 * sin(ang * 2.0 - uTime * 2.4);
+              float diskFactor = smoothstep(0.33, 0.47, bodyR) * (1.0 - smoothstep(0.47, 1.0, bodyR));
+              vec3 diskColor = mix(vec3(0.7, 0.2, 1.0), vec3(1.0, 0.45, 0.1), smoothstep(0.33, 1.0, bodyR));
+              vec3 col = diskColor * 1.8 * swirl;
+              float alpha = diskFactor * 0.95;
+              // Фотонное кольцо: свет, искривлённый гравитацией у горизонта (линзирование).
+              float photon = smoothstep(0.39, 0.42, bodyR) * (1.0 - smoothstep(0.42, 0.46, bodyR));
+              col += vec3(0.75, 0.85, 1.0) * photon * 1.5;
+              alpha = max(alpha, photon * 0.95);
+              diffuseColor = vec4(col, alpha * vBodyAlpha);
             }
           } else if (vDensity >= 45.0) {
-            // Нейтронная звезда: крошечное ослепительно бело-голубое ядро.
+            // Нейтронная звезда (пульсар): ослепительное ядро с быстрым пульсом.
+            float pulse = 0.85 + 0.15 * sin(uTime * 7.0 + vSeed * 6.2831);
             float core = 1.0 - smoothstep(0.0, 1.0, bodyR);
             vec3 nsColor = mix(vec3(0.62, 0.86, 1.0), vec3(1.0), core * core);
-            diffuseColor = vec4(nsColor * (1.4 + core * 0.8), bodyEdge * vBodyAlpha);
+            diffuseColor = vec4(nsColor * (1.4 + core * 0.8) * pulse, bodyEdge * vBodyAlpha);
           } else if (vDensity >= 4.0) {
             // Белый карлик: маленькое плотное бело-голубое ядро.
             float core = 1.0 - smoothstep(0.0, 1.0, bodyR);
             vec3 wdColor = mix(vec3(0.85, 0.9, 1.0), vec3(1.0), core);
             diffuseColor = vec4(wdColor * (1.15 + core * 0.5), bodyEdge * vBodyAlpha);
           } else if (vDensity >= 0.3) {
-            // Звезда: яркое горячее ядро (корона добавляется ниже как ореол).
+            // Звезда: яркое горячее ядро с медленной пульсацией.
+            float pulse = 0.94 + 0.06 * sin(uTime * 1.3 + vSeed * 6.2831);
             float core = 1.0 - smoothstep(0.0, 0.95, bodyR);
             vec3 starColor = mix(vBodyColor, vec3(1.0, 0.95, 0.82), core * 0.6);
-            diffuseColor = vec4(starColor * (1.25 + core * 0.6), bodyEdge * vBodyAlpha);
+            diffuseColor = vec4(starColor * (1.25 + core * 0.6) * pulse, bodyEdge * vBodyAlpha);
           } else if (vDensity < 0.09) {
-            // Газовый гигант: полосы (фаза/частота зависят от тела) + пятно-шторм.
-            float bands = 0.5 + 0.5 * sin(local.y * (7.0 + vSeed * 5.0) + vSeed * 6.2831);
+            // Газовый гигант: полосы + дрейфующее пятно-шторм + лёгкая турбулентность.
+            float turb = 0.15 * vnoise(local * 4.0 + vec2(uTime * 0.2, 0.0));
+            float bands = 0.5 + 0.5 * sin(local.y * (7.0 + vSeed * 5.0) + vSeed * 6.2831 + turb * 6.0);
             vec3 ggBase = mix(shadedBodyColor, vec3(0.85, 0.72, 0.55), 0.45);
             ggBase *= mix(0.8, 1.12, bands);
-            // Большое пятно-шторм: смещённый овал, положение чуть варьируется по сиду.
-            vec2 spot = (local - vec2(0.3, -0.18 + (vSeed - 0.5) * 0.3)) * vec2(1.0, 1.7);
+            // Большое пятно-шторм дрейфует по долготе со временем.
+            float drift = uTime * 0.15 + vSeed * 6.2831;
+            vec2 spot = (local - vec2(0.3 * cos(drift), -0.18 + (vSeed - 0.5) * 0.3)) * vec2(1.0, 1.7);
             float storm = 1.0 - smoothstep(0.0, 0.32, length(spot));
             ggBase = mix(ggBase, vec3(0.78, 0.34, 0.24), storm * 0.55);
             diffuseColor = vec4(ggBase, bodyEdge * vBodyAlpha * 0.92);
@@ -299,7 +313,7 @@ export class GPUEngine {
         `,
       );
     };
-    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v6";
+    this.particleMaterial.customProgramCacheKey = () => "gpgpu-particles-v7";
     const particles = new THREE.Mesh(geometry, this.particleMaterial);
     particles.frustumCulled = false;
     this.scene.add(particles);
@@ -575,6 +589,7 @@ export class GPUEngine {
     if (this.particleUniforms) {
       this.particleUniforms.texturePosition.value = this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
       this.particleUniforms.textureVelocity.value = this.gpuCompute.getCurrentRenderTarget(this.velocityVariable).texture;
+      this.particleUniforms.uTime.value = this.elapsed;
     }
 
     if (!this.hasPreviousCamera) {
