@@ -2,7 +2,7 @@ import "./style.css";
 import { GPUEngine, type BodySnapshot, type CameraState, type CreationPreview, type Vec2 } from "./gpu-engine";
 import { BodiesSidebar } from "./ui";
 import { SpaceAudio } from "./audio";
-import { OBJECT_TYPES, OBJECT_TYPE_MAP, massFor, type ObjectType, type ObjectTypeId } from "./object-types";
+import { OBJECT_TYPES, OBJECT_TYPE_MAP, classifyByDensity, massFor, type ObjectType, type ObjectTypeId } from "./object-types";
 
 type InteractionMode = "idle" | "create" | "pan";
 type CreationStyle = "growing" | "vector";
@@ -44,6 +44,14 @@ const scenarioClearBtn = document.querySelector<HTMLButtonElement>("#scenario-cl
 const sceneSaveBtn = document.querySelector<HTMLButtonElement>("#scene-save")!;
 const sceneLoadBtn = document.querySelector<HTMLButtonElement>("#scene-load")!;
 const sceneFileInput = document.querySelector<HTMLInputElement>("#scene-file")!;
+
+const hoverCard = document.querySelector<HTMLElement>("#hover-card")!;
+const hoverDot = document.querySelector<HTMLElement>("#hover-dot")!;
+const hoverName = document.querySelector<HTMLElement>("#hover-name")!;
+const hoverMass = document.querySelector<HTMLElement>("#hover-mass")!;
+const hoverDensity = document.querySelector<HTMLElement>("#hover-density")!;
+const hoverRadius = document.querySelector<HTMLElement>("#hover-radius")!;
+const hoverSpeed = document.querySelector<HTMLElement>("#hover-speed")!;
 
 const engine = new GPUEngine(canvas);
 const camera: CameraState = { x: 0, y: 0, zoom: 1 };
@@ -384,6 +392,31 @@ function hitTest(worldPoint: Vec2): number | null {
   return best;
 }
 
+// Карточка-подсказка под курсором: тип, масса, плотность, радиус и скорость тела
+// под указателем. Показывается только когда нет активного взаимодействия.
+function updateHover(screenPos: Vec2): void {
+  if (interactionMode !== "idle") { hoverCard.hidden = true; return; }
+  const id = hitTest(screenToWorld(screenPos));
+  const body = id === null ? undefined : snapshots.find((candidate) => candidate.id === id);
+  if (!body) { hoverCard.hidden = true; return; }
+  const type = classifyByDensity(body.density, body.radius);
+  hoverDot.style.setProperty("--type-accent", type.accent);
+  hoverName.textContent = type.name;
+  hoverMass.textContent = body.mass.toFixed(1);
+  hoverDensity.textContent = body.density.toFixed(2);
+  hoverRadius.textContent = body.radius.toFixed(1);
+  hoverSpeed.textContent = Math.hypot(body.velocity.x, body.velocity.y).toFixed(1);
+  // У курсора, с переносом влево/вверх у правого и нижнего краёв холста.
+  const pad = 16;
+  const cardW = 150;
+  const cardH = 96;
+  const left = screenPos.x + pad + cardW > width ? screenPos.x - cardW - pad : screenPos.x + pad;
+  const top = screenPos.y + pad + cardH > height ? screenPos.y - cardH - pad : screenPos.y + pad;
+  hoverCard.style.left = `${Math.max(0, left)}px`;
+  hoverCard.style.top = `${Math.max(0, top)}px`;
+  hoverCard.hidden = false;
+}
+
 function setCursorMode(mode: CursorMode): void {
   if (cursorMode === mode) return;
   cursorMode = mode;
@@ -418,6 +451,7 @@ canvas.addEventListener("pointerdown", (event) => {
   const shouldPan = event.button === 1 || (event.button === 0 && spacePressed);
   if (!shouldPan && event.button !== 0) return;
   event.preventDefault();
+  hoverCard.hidden = true;
 
   // Режим выбора: ЛКМ только выделяет тело — без создания и без захвата указателя.
   if (!shouldPan && cursorMode === "select") {
@@ -502,6 +536,11 @@ canvas.addEventListener("pointercancel", endInteraction);
 canvas.addEventListener("auxclick", (event) => {
   if (event.button === 1) event.preventDefault();
 });
+
+// Подсказка по наведению (отдельно от создания/панорамирования — само гасится, когда
+// взаимодействие активно). Прячется, когда курсор уходит с холста.
+canvas.addEventListener("pointermove", (event) => updateHover(pointerScreenPosition(event)));
+canvas.addEventListener("pointerleave", () => { hoverCard.hidden = true; });
 
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();

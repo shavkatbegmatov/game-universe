@@ -112,3 +112,9 @@ test("keyboard shortcuts drive type selection, modes and actions", () => {
   assert.match(main, /case "p": pauseButton\.click\(\)/);
   assert.doesNotMatch(main, /case "space"/); // Space остаётся для панорамирования
 });
+
+test("hovering a body shows an info card with its type and stats", () => {
+  assert.match(main, /function updateHover/);
+  assert.match(main, /classifyByDensity\(body\.density, body\.radius\)/);
+  assert.match(main, /canvas\.addEventListener\("pointerleave"/);
+});

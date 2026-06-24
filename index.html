@@ -46,6 +46,19 @@
       <canvas id="space-canvas"></canvas>
       <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
 
+      <div class="hover-card" id="hover-card" hidden>
+        <div class="hover-head">
+          <span class="hover-dot" id="hover-dot" aria-hidden="true"></span>
+          <strong id="hover-name"></strong>
+        </div>
+        <dl class="hover-metrics">
+          <div><dt>Масса</dt><dd id="hover-mass"></dd></div>
+          <div><dt>Плотность</dt><dd id="hover-density"></dd></div>
+          <div><dt>Радиус</dt><dd id="hover-radius"></dd></div>
+          <div><dt>Скорость</dt><dd id="hover-speed"></dd></div>
+        </dl>
+      </div>
+
         <div class="instruction" id="instruction">
           <span class="mouse-glyph" aria-hidden="true"><i></i></span>
           <div>

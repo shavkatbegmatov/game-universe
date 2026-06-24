@@ -176,6 +176,32 @@ h1 {
 
 .notice[hidden] { display: none; }
 
+/* Floating info card shown when hovering a body on the canvas */
+.hover-card {
+  position: absolute;
+  z-index: 30;
+  min-width: 134px;
+  padding: 9px 11px;
+  background: rgba(14, 16, 22, .92);
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 9px;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+.hover-card[hidden] { display: none; }
+.hover-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+.hover-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--type-accent, #62c8ff);
+  box-shadow: 0 0 8px var(--type-accent, #62c8ff);
+}
+.hover-head strong { color: #e5e9f0; font-size: 11px; font-weight: 600; }
+.hover-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px 12px; margin: 0; }
+.hover-metrics dt { margin-bottom: 2px; color: #59616d; font-size: 7px; letter-spacing: .08em; text-transform: uppercase; }
+.hover-metrics dd { margin: 0; color: #c2cad6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+
 .instruction {
   position: absolute;
   left: 50%;
